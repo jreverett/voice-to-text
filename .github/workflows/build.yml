@@ -23,33 +23,33 @@ jobs:
       - name: Build mic-capture (self-contained single-file)
         run: dotnet publish tools\mic-capture -c Release -o build\bin -r win-x64 --self-contained -p:PublishSingleFile=true
 
-      - name: Install AutoHotkey v2
-        run: choco install autohotkey -y --no-progress
+      - name: Download AutoHotkey v2 and Ahk2Exe
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          # Download AHK v2 portable
+          $ahkRelease = Invoke-RestMethod "https://api.github.com/repos/AutoHotkey/AutoHotkey/releases/latest"
+          $ahkZip = $ahkRelease.assets | Where-Object { $_.name -match "AutoHotkey.*\.zip$" } | Select-Object -First 1
+          Invoke-WebRequest $ahkZip.browser_download_url -OutFile ahk.zip
+          Expand-Archive ahk.zip -DestinationPath ahk
+          # Download Ahk2Exe
+          $compilerRelease = Invoke-RestMethod "https://api.github.com/repos/AutoHotkey/Ahk2Exe/releases/latest"
+          $compilerZip = $compilerRelease.assets | Where-Object { $_.name -match "\.zip$" } | Select-Object -First 1
+          Invoke-WebRequest $compilerZip.browser_download_url -OutFile ahk2exe.zip
+          Expand-Archive ahk2exe.zip -DestinationPath ahk\Compiler
 
       - name: Compile AHK to exe
         shell: pwsh
         run: |
-          # Search common install locations for Ahk2Exe
-          $searchPaths = @(
-            "C:\Program Files\AutoHotkey",
-            "C:\ProgramData\chocolatey\lib\autohotkey",
-            "C:\ProgramData\chocolatey\bin"
-          )
-          $ahk2exe = $null
-          foreach ($path in $searchPaths) {
-            if (Test-Path $path) {
-              $found = Get-ChildItem $path -Recurse -Filter "Ahk2Exe.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-              if ($found) { $ahk2exe = $found.FullName; break }
-            }
-          }
-          # Fallback: search entire drive
-          if (!$ahk2exe) {
-            $found = Get-ChildItem "C:\" -Recurse -Filter "Ahk2Exe.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($found) { $ahk2exe = $found.FullName }
-          }
-          if (!$ahk2exe) { throw "Ahk2Exe.exe not found" }
-          Write-Host "Found Ahk2Exe at: $ahk2exe"
-          & $ahk2exe /in "voice-to-text.ahk" /out "build\voice-to-text.exe" /icon "icons\idle.ico" /silent
+          $ahk2exe = Get-ChildItem "ahk\Compiler" -Filter "Ahk2Exe.exe" -Recurse | Select-Object -First 1
+          if (!$ahk2exe) { throw "Ahk2Exe.exe not found in downloaded archive" }
+          Write-Host "Using Ahk2Exe: $($ahk2exe.FullName)"
+          # Find the 64-bit base file
+          $base = Get-ChildItem "ahk" -Filter "AutoHotkey64.exe" -Recurse | Select-Object -First 1
+          $baseArg = if ($base) { "/base `"$($base.FullName)`"" } else { "" }
+          $expr = "& `"$($ahk2exe.FullName)`" /in `"voice-to-text.ahk`" /out `"build\voice-to-text.exe`" /icon `"icons\idle.ico`" $baseArg /silent"
+          Write-Host "Running: $expr"
+          Invoke-Expression $expr
 
       - name: Download whisper.cpp (OpenBLAS)
         shell: pwsh
