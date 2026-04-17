@@ -1,41 +1,47 @@
 # Voice-to-Text
 
+**This file must be kept up to date when committing changes.** If a commit changes architecture, design decisions, constraints, files, or configuration, update the relevant sections here as part of the same commit.
+
 ## Purpose
 
 Local push-to-talk speech-to-text for Windows. The primary use case is dictating prompts — hold Shift+Alt, speak, release, paste the transcribed text. Everything runs locally with no cloud dependencies.
 
 ## Architecture
 
-Single AutoHotkey v2 script (`voice-to-text.ahk`) orchestrating two external binaries:
+Single AutoHotkey v2 script (`voice-to-text.ahk`) orchestrating two external processes:
 
-- **ffmpeg** captures mic audio via DirectShow into a 16kHz mono WAV
-- **whisper-server** (whisper.cpp) runs as a persistent local HTTP server with the model pre-loaded in memory, accepting WAV files and returning transcribed text
+- **ffmpeg** captures mic audio via DirectShow into a 16kHz mono WAV. A warmup instance runs continuously to NUL, keeping the DirectShow device and Windows audio pipeline open so real recording starts near-instantly on hotkey press.
+- **whisper-server** (whisper.cpp with OpenBLAS) runs as a persistent local HTTP server on port 8178 with the model pre-loaded in memory. Accepts WAV files via multipart POST and returns transcribed text.
+- **curl** (ships with Windows 10+) sends the WAV to the local whisper-server.
 
-Flow: `Hotkey Down → ffmpeg starts recording → Hotkey Up → ffmpeg stops → WAV posted to whisper-server via curl → text copied to clipboard`
+Flow: `Script start → warmup ffmpeg + whisper-server launch → Hotkey Down → kill warmup, start real ffmpeg → Hotkey Up → stop ffmpeg → curl POST to whisper-server → text to clipboard → restart warmup`
 
 ## Key Design Decisions
 
 - **Whisper server mode** instead of CLI-per-invocation: eliminates ~625ms model load on every transcription. The server starts on script launch and stays warm.
+- **Mic pre-warming**: a background ffmpeg records to NUL continuously, keeping the DirectShow device open. On hotkey press, the warmup is killed and real recording starts — device re-initialization is near-instant because the OS audio pipeline is already active. Warmup restarts after each transcription.
+- **OpenBLAS build**: setup.ps1 prefers the `whisper-blas-bin-x64.zip` release for accelerated CPU matrix operations over the plain build.
+- **16 threads**: the target hardware (Intel Core Ultra 7 165H) has 16 physical cores. Configured via config.ini.
 - **Auto-elevates to admin**: required because Windows Terminal (and other elevated apps) block keyboard hooks from non-admin processes.
 - **Shift+Alt hotkey** uses `~*LAlt` with LShift state check. The `~` prefix lets keys pass through normally when not in a recording combo. A dedicated `*LShift Up` hook was removed because it blocked normal Shift usage.
-- **ffmpeg 600ms warmup**: DirectShow device initialization takes ~500ms. The script waits before showing "Recording..." so the user knows when audio capture has actually started.
 - **curl for HTTP**: AHK's COM-based HTTP objects can't easily do multipart file uploads. curl ships with Windows 10+ and handles it cleanly.
 - **Config-driven**: all paths, mic device, hotkey, threads, and server port live in `config.ini`. The AHK script reads these at startup.
+- **Accuracy over speed**: uses `small.en` model (487MB). Do not downgrade to smaller models — accurate transcription is a hard requirement.
 
 ## Constraints
 
 - **Windows only** — depends on DirectShow (ffmpeg -f dshow), AutoHotkey v2, and Windows startup shortcuts
-- **CPU inference only** — whisper.cpp runs on CPU (no GPU detected on this Surface device). Encode time ~3s for short clips with `small.en` model and 8 threads.
+- **CPU inference only** — the hardware has Intel Arc integrated graphics but no prebuilt Vulkan whisper.cpp binary exists. CUDA builds won't work (not NVIDIA). Encode time ~1.5-3s for short clips with `small.en` and 16 threads on OpenBLAS.
 - **No tests** — the script is pure I/O orchestration (real mic, real processes, real HTTP). Mocking everything would test nothing useful. Validate changes manually: hold hotkey, speak, check clipboard.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `voice-to-text.ahk` | Core script — hotkey handling, ffmpeg lifecycle, whisper-server communication, clipboard, tray UI |
-| `config.ini` | User configuration — mic device, hotkey, model path, server port, threads |
-| `setup.ps1` | Idempotent installer — downloads ffmpeg, whisper.cpp (cli + server), model, generates tray icons, creates startup shortcut |
-| `bin/` | ffmpeg.exe, whisper-cli.exe, whisper-server.exe, DLLs (gitignored, downloaded by setup.ps1) |
+| `voice-to-text.ahk` | Core script — hotkey handling, mic warmup, ffmpeg lifecycle, whisper-server communication, clipboard, tray UI |
+| `config.ini` | User configuration — mic device, hotkey, model path, server port, threads, startup |
+| `setup.ps1` | Idempotent installer — downloads ffmpeg, whisper.cpp OpenBLAS build (cli + server), model, generates tray icons, creates startup shortcut |
+| `bin/` | ffmpeg.exe, whisper-cli.exe, whisper-server.exe, OpenBLAS + ggml DLLs (gitignored, downloaded by setup.ps1) |
 | `models/` | ggml-small.en.bin (gitignored, downloaded by setup.ps1) |
 | `icons/` | Tray icons generated by setup.ps1 — green (idle), red (recording), yellow (transcribing) |
 | `temp/` | Transient recording.wav and whisper_output.txt (gitignored) |
@@ -44,5 +50,5 @@ Flow: `Hotkey Down → ffmpeg starts recording → Hotkey Up → ffmpeg stops �
 
 - **Change hotkey**: edit `PushToTalk` in config.ini. Single keys (CapsLock, F13, ScrollLock) work directly. `ShiftAlt` is a special-cased modifier combo.
 - **Change mic**: use tray menu "List Audio Devices", copy exact name to config.ini `MicDevice`.
-- **Improve accuracy**: swap `ModelPath` to a larger model (base.en → small.en → medium.en). Larger models are slower but more accurate.
-- **Add GPU support**: replace bin/ contents with CUDA/cuBLAS whisper.cpp build. No script changes needed.
+- **Improve accuracy**: swap `ModelPath` to a larger model (small.en → medium.en). Larger models are slower but more accurate. Do not downgrade below small.en.
+- **Add GPU support**: if a prebuilt Vulkan whisper.cpp binary becomes available, replace bin/ contents with it. No script changes needed. Intel Arc GPU could provide ~3-5x speedup.

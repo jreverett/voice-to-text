@@ -68,15 +68,14 @@ if (!(Test-Path $whisperExe)) {
     Write-Host "Querying latest whisper.cpp release..."
     $releaseInfo = Invoke-RestMethod -Uri "https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest" -UseBasicParsing
 
-    # Find the x64 Windows binary asset
+    # Prefer OpenBLAS build for faster CPU matrix ops, fall back to plain
     $asset = $releaseInfo.assets | Where-Object {
-        $_.name -match "whisper.*bin.*x64\.zip$" -and $_.name -notmatch "cublas|cuda|openblas|arm"
+        $_.name -match "whisper-blas-bin-x64\.zip$"
     } | Select-Object -First 1
 
     if (!$asset) {
-        # Fallback: try any Windows x64 zip
         $asset = $releaseInfo.assets | Where-Object {
-            $_.name -match "win.*x64\.zip$" -or $_.name -match "x64.*win.*\.zip$"
+            $_.name -match "whisper.*bin.*x64\.zip$" -and $_.name -notmatch "cublas|cuda|openblas|arm"
         } | Select-Object -First 1
     }
 
@@ -122,11 +121,11 @@ if (!(Test-Path $whisperServer)) {
     Write-Host "`n--- Downloading whisper-server.exe ---"
     $releaseInfo = Invoke-RestMethod -Uri "https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest" -UseBasicParsing
     $asset = $releaseInfo.assets | Where-Object {
-        $_.name -match "whisper.*bin.*x64\.zip$" -and $_.name -notmatch "cublas|cuda|openblas|arm"
+        $_.name -match "whisper-blas-bin-x64\.zip$"
     } | Select-Object -First 1
     if (!$asset) {
         $asset = $releaseInfo.assets | Where-Object {
-            $_.name -match "win.*x64\.zip$" -or $_.name -match "x64.*win.*\.zip$"
+            $_.name -match "whisper.*bin.*x64\.zip$" -and $_.name -notmatch "cublas|cuda|openblas|arm"
         } | Select-Object -First 1
     }
     if ($asset) {

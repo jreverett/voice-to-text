@@ -13,6 +13,7 @@ if !A_IsAdmin {
 isRecording := false
 isTranscribing := false
 ffmpegPID := 0
+warmupPID := 0
 serverPID := 0
 
 ; --- Load Config ---
@@ -24,7 +25,7 @@ WhisperServerPath := A_ScriptDir "\" IniRead(configPath, "Paths", "WhisperServer
 ModelPath := A_ScriptDir "\" IniRead(configPath, "Paths", "ModelPath", "models\ggml-small.en.bin")
 TempWav := A_ScriptDir "\" IniRead(configPath, "Paths", "TempWav", "temp\recording.wav")
 PushToTalkKey := IniRead(configPath, "Hotkey", "PushToTalk", "CapsLock")
-ExtraFlags := IniRead(configPath, "Whisper", "ExtraFlags", "--no-timestamps --threads 8")
+ExtraFlags := IniRead(configPath, "Whisper", "ExtraFlags", "--no-timestamps --threads 16")
 ServerPort := IniRead(configPath, "Whisper", "ServerPort", "8178")
 
 ; --- Validate Binaries ---
@@ -52,7 +53,7 @@ shiftAltActive := false
 
 ; --- Start Whisper Server (keeps model warm in memory) ---
 ToolTip("Loading whisper model...")
-serverCmd := '"' WhisperServerPath '" -m "' ModelPath '" --port ' ServerPort ' --threads 8'
+serverCmd := '"' WhisperServerPath '" -m "' ModelPath '" --port ' ServerPort ' --threads 16'
 Run(serverCmd, A_ScriptDir, "Hide", &serverPID)
 
 ; Wait for server to be ready by polling the health endpoint
@@ -78,6 +79,9 @@ if !serverReady {
     ExitApp()
 }
 ToolTip()
+
+; --- Pre-warm microphone (keeps DirectShow device open so hotkey recording starts instantly) ---
+StartMicWarmup()
 
 ; --- Tray Setup ---
 idleIcon := A_ScriptDir "\icons\idle.ico"
@@ -106,6 +110,27 @@ if isShiftAltMode {
 
 ; --- Exit Handler ---
 OnExit(CleanUp)
+
+; --- Mic Warmup ---
+StartMicWarmup() {
+    global warmupPID, FfmpegPath, MicDevice
+    ; Record to NUL to keep DirectShow device open and audio pipeline active
+    cmd := 'cmd /c ""' FfmpegPath '" -f dshow -i audio="' MicDevice '" -f null NUL"'
+    Run(cmd, A_ScriptDir, "Hide", &warmupPID)
+}
+
+StopMicWarmup() {
+    global warmupPID
+    if warmupPID and ProcessExist(warmupPID) {
+        Run('cmd /c "taskkill /pid ' warmupPID ' 2>nul"', , "Hide")
+        ProcessWaitClose(warmupPID, 2)
+        if ProcessExist(warmupPID) {
+            ProcessClose(warmupPID)
+            ProcessWaitClose(warmupPID, 1)
+        }
+        warmupPID := 0
+    }
+}
 
 ; --- Shift+Alt Combo Handlers ---
 ShiftAltDown(*) {
@@ -143,14 +168,15 @@ OnKeyDown(*) {
     if FileExist(recordingIcon)
         TraySetIcon(recordingIcon)
 
-    ToolTip("Starting...")
+    ; Kill warmup ffmpeg — device stays warm in the OS audio pipeline briefly
+    StopMicWarmup()
 
-    ; Launch ffmpeg with -t 30 max duration
+    ; Start real recording immediately — device re-init is near-instant while warm
     cmd := 'cmd /c ""' FfmpegPath '" -f dshow -i audio="' MicDevice '" -ac 1 -ar 16000 -t 30 -y "' TempWav '""'
     Run(cmd, A_ScriptDir, "Hide", &ffmpegPID)
 
-    ; Wait for ffmpeg to initialize dshow capture device
-    Sleep(600)
+    ; Short wait for ffmpeg process to start (not full device init)
+    Sleep(150)
     ToolTip("Recording...")
 }
 
@@ -180,6 +206,7 @@ OnKeyUp(*) {
     if !FileExist(TempWav) {
         ShowTooltipTimed("No recording captured", 2000)
         ResetIcon()
+        StartMicWarmup()
         return
     }
 
@@ -187,6 +214,7 @@ OnKeyUp(*) {
     if fileSize < 1000 {
         ShowTooltipTimed("Too short - try holding longer", 2000)
         ResetIcon()
+        StartMicWarmup()
         return
     }
 
@@ -195,6 +223,9 @@ OnKeyUp(*) {
     if FileExist(transcribingIcon)
         TraySetIcon(transcribingIcon)
     ToolTip("Transcribing...")
+
+    ; Restart mic warmup while transcription runs
+    StartMicWarmup()
 
     ; POST audio to whisper server via curl (ships with Windows 10+)
     tempOutput := A_ScriptDir "\temp\whisper_output.txt"
@@ -272,11 +303,15 @@ OpenConfig(*) {
 }
 
 CleanUp(exitReason, exitCode) {
-    global ffmpegPID, serverPID, isCapsLockHotkey
+    global ffmpegPID, warmupPID, serverPID, isCapsLockHotkey
 
     ; Kill any running ffmpeg
     if ffmpegPID and ProcessExist(ffmpegPID)
         ProcessClose(ffmpegPID)
+
+    ; Kill warmup ffmpeg
+    if warmupPID and ProcessExist(warmupPID)
+        ProcessClose(warmupPID)
 
     ; Kill whisper server
     if serverPID and ProcessExist(serverPID)
