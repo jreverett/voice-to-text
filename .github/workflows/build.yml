@@ -1,0 +1,126 @@
+name: Build Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          dotnet-quality: 'preview'
+
+      - name: Build mic-capture (self-contained single-file)
+        run: dotnet publish tools\mic-capture -c Release -o build\bin -r win-x64 --self-contained -p:PublishSingleFile=true
+
+      - name: Install AutoHotkey v2
+        run: choco install autohotkey -y --no-progress
+
+      - name: Compile AHK to exe
+        run: |
+          $ahk2exe = Get-ChildItem "C:\Program Files\AutoHotkey" -Recurse -Filter "Ahk2Exe.exe" | Select-Object -First 1
+          & $ahk2exe.FullName /in "voice-to-text.ahk" /out "build\voice-to-text.exe" /icon "icons\idle.ico" /silent
+
+      - name: Download whisper.cpp (OpenBLAS)
+        shell: pwsh
+        run: |
+          $release = Invoke-RestMethod "https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest"
+          $asset = $release.assets | Where-Object { $_.name -match "whisper-blas-bin-x64\.zip$" } | Select-Object -First 1
+          if (!$asset) {
+            $asset = $release.assets | Where-Object { $_.name -match "whisper.*bin.*x64\.zip$" -and $_.name -notmatch "cublas|cuda|openblas|arm" } | Select-Object -First 1
+          }
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest $asset.browser_download_url -OutFile whisper.zip
+          Expand-Archive whisper.zip -DestinationPath whisper-extract
+          Get-ChildItem whisper-extract -Recurse -File | Where-Object {
+            $_.Name -eq "whisper-server.exe" -or $_.Extension -eq ".dll"
+          } | ForEach-Object {
+            Copy-Item $_.FullName "build\bin\$($_.Name)" -Force
+          }
+
+      - name: Generate icons
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Drawing
+          New-Item -ItemType Directory -Path "build\icons" -Force | Out-Null
+          $colors = @{
+            "idle"         = @(34, 197, 94)
+            "starting"     = @(251, 146, 60)
+            "recording"    = @(239, 68, 68)
+            "transcribing" = @(250, 204, 21)
+          }
+          foreach ($name in $colors.Keys) {
+            $rgb = $colors[$name]
+            $bmp = New-Object System.Drawing.Bitmap(32, 32, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+            $g.Clear([System.Drawing.Color]::Transparent)
+            $color = [System.Drawing.Color]::FromArgb(255, $rgb[0], $rgb[1], $rgb[2])
+            $brush = New-Object System.Drawing.SolidBrush($color)
+            $g.FillEllipse($brush, 2, 2, 28, 28)
+            $darker = [System.Drawing.Color]::FromArgb(255, [Math]::Max(0,$rgb[0]-40), [Math]::Max(0,$rgb[1]-40), [Math]::Max(0,$rgb[2]-40))
+            $pen = New-Object System.Drawing.Pen($darker, 1.5)
+            $g.DrawEllipse($pen, 2, 2, 28, 28)
+            $g.Dispose(); $brush.Dispose(); $pen.Dispose()
+            $ms = New-Object System.IO.MemoryStream
+            $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+            $pngBytes = $ms.ToArray(); $ms.Dispose(); $bmp.Dispose()
+            $fs = [System.IO.File]::Create("build\icons\$name.ico")
+            $bw = New-Object System.IO.BinaryWriter($fs)
+            $bw.Write([UInt16]0); $bw.Write([UInt16]1); $bw.Write([UInt16]1)
+            $bw.Write([byte]32); $bw.Write([byte]32); $bw.Write([byte]0); $bw.Write([byte]0)
+            $bw.Write([UInt16]1); $bw.Write([UInt16]32)
+            $bw.Write([UInt32]$pngBytes.Length); $bw.Write([UInt32]22)
+            $bw.Write($pngBytes)
+            $bw.Close(); $fs.Close()
+          }
+
+      - name: Create default config
+        shell: pwsh
+        run: |
+          @"
+          [Audio]
+          MicDevice=
+
+          [Paths]
+          MicCapturePath=bin\mic-capture.exe
+          WhisperServerPath=bin\whisper-server.exe
+          ModelPath=models\ggml-small.en.bin
+          TempWav=temp\recording.wav
+
+          [Hotkey]
+          PushToTalk=ShiftAlt
+
+          [Startup]
+          RunAtLogin=true
+
+          [Whisper]
+          Threads=8
+          ServerPort=8178
+          "@ | Set-Content "build\config.ini" -NoNewline
+
+      - name: Create directory structure
+        run: |
+          New-Item -ItemType Directory -Path "build\models" -Force | Out-Null
+          New-Item -ItemType Directory -Path "build\temp" -Force | Out-Null
+
+      - name: Package release zip
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "build\*" -DestinationPath "voice-to-text-${{ github.ref_name }}.zip"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: voice-to-text-*.zip
+          generate_release_notes: true

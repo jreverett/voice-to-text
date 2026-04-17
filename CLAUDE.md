@@ -53,7 +53,25 @@ Flow: `Script start → whisper-server launch → Hotkey Down → mic-capture st
 ## Common Changes
 
 - **Change hotkey**: edit `PushToTalk` in config.ini. Single keys (CapsLock, F13, ScrollLock) work directly. `ShiftAlt` is a special-cased modifier combo.
-- **Change mic**: use tray menu "List Audio Devices", copy exact name to config.ini `MicDevice`.
+- **Change mic**: use tray menu "Change Microphone" — select from a GUI picker, writes to config.ini and reloads automatically.
 - **Improve accuracy**: swap `ModelPath` to a larger model (small.en → medium.en). Larger models are slower but more accurate. Do not downgrade below small.en.
 - **Add GPU support**: if a prebuilt Vulkan whisper.cpp binary becomes available, replace bin/ contents with it. No script changes needed. Intel Arc GPU could provide ~3-5x speedup.
 - **Rebuild mic-capture**: `dotnet publish tools/mic-capture -c Release -o bin` from project root.
+- **Create a release**: push a tag like `v1.0.0` — GitHub Actions builds everything, bundles into a zip, and creates a GitHub Release. The zip includes compiled AHK exe, self-contained mic-capture, whisper-server + DLLs, icons, and default config. Model downloads on first run.
+
+## Release Pipeline
+
+`.github/workflows/build.yml` triggers on version tags (`v*`). It:
+1. Builds mic-capture as self-contained single-file (no .NET install needed for end users)
+2. Compiles voice-to-text.ahk to exe via AHK2Exe (no AHK install needed)
+3. Downloads whisper.cpp OpenBLAS binaries
+4. Generates tray icons
+5. Creates a default config.ini (empty MicDevice triggers first-run setup)
+6. Packages everything into `voice-to-text-{tag}.zip` and attaches to a GitHub Release
+
+## First-Run Experience
+
+When `MicDevice` is empty (fresh install from release zip):
+1. Script downloads `ggml-small.en.bin` (~466MB) via curl on first launch
+2. Shows a mic selection GUI — user picks their device, config is written, script reloads
+3. Whisper-server starts, ready to transcribe

@@ -18,7 +18,7 @@ serverPID := 0
 ; --- Load Config ---
 configPath := A_ScriptDir "\config.ini"
 
-MicDevice := IniRead(configPath, "Audio", "MicDevice", "Microphone (Realtek(R) Audio)")
+MicDevice := IniRead(configPath, "Audio", "MicDevice", "")
 MicCapturePath := A_ScriptDir "\" IniRead(configPath, "Paths", "MicCapturePath", "bin\mic-capture.exe")
 WhisperServerPath := A_ScriptDir "\" IniRead(configPath, "Paths", "WhisperServerPath", "bin\whisper-server.exe")
 ModelPath := A_ScriptDir "\" IniRead(configPath, "Paths", "ModelPath", "models\ggml-small.en.bin")
@@ -37,8 +37,69 @@ if !FileExist(WhisperServerPath) {
     ExitApp()
 }
 if !FileExist(ModelPath) {
-    MsgBox("Model not found at:`n" ModelPath "`n`nRun setup.ps1 first.", "Voice-to-Text", "Icon!")
-    ExitApp()
+    ; First run — download the model automatically
+    modelDir := A_ScriptDir "\models"
+    if !DirExist(modelDir)
+        DirCreate(modelDir)
+    modelUrl := "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin"
+    ToolTip("Downloading whisper model (~466MB)...`nThis only happens once.")
+    try {
+        cmd := 'cmd /c "curl -L -o "' ModelPath '" "' modelUrl '""'
+        RunWait(cmd, A_ScriptDir, "Hide")
+    }
+    ToolTip()
+    if !FileExist(ModelPath) {
+        MsgBox("Failed to download model.`nCheck your internet connection and try again.", "Voice-to-Text", "Icon!")
+        ExitApp()
+    }
+}
+
+; --- First-run mic selection ---
+if MicDevice = "" {
+    ; Detect available devices
+    tempDevices := A_ScriptDir "\temp\devices.txt"
+    DirCreate(A_ScriptDir "\temp")
+    cmd := 'cmd /c ""' MicCapturePath '" list > "' tempDevices '" 2>&1"'
+    RunWait(cmd, A_ScriptDir, "Hide")
+
+    firstRunDevices := []
+    if FileExist(tempDevices) {
+        content := FileRead(tempDevices)
+        for line in StrSplit(content, "`n") {
+            line := Trim(line)
+            if line != ""
+                firstRunDevices.Push(line)
+        }
+        FileDelete(tempDevices)
+    }
+
+    if firstRunDevices.Length = 0 {
+        MsgBox("No audio input devices found.`nConnect a microphone and restart.", "Voice-to-Text", "Icon!")
+        ExitApp()
+    }
+
+    ; Show picker
+    setupGui := Gui("+AlwaysOnTop", "Voice-to-Text Setup")
+    setupGui.Add("Text", , "Welcome! Select your microphone to get started:")
+    setupLb := setupGui.Add("ListBox", "w400 r" Min(firstRunDevices.Length, 8), firstRunDevices)
+    setupLb.Choose(1)
+    setupGui.Add("Button", "w400 Default", "Continue").OnEvent("Click", SetupApply)
+    setupGui.OnEvent("Close", (*) => ExitApp())
+    setupGui.Show()
+
+    SetupApply(*) {
+        selected := setupLb.Text
+        if selected = "" {
+            MsgBox("Please select a device.", "Voice-to-Text", "Icon!")
+            return
+        }
+        IniWrite(selected, configPath, "Audio", "MicDevice")
+        setupGui.Destroy()
+        Reload()
+    }
+
+    ; Block until GUI is closed (Reload or ExitApp will end execution)
+    return
 }
 
 ; --- CapsLock Override ---
