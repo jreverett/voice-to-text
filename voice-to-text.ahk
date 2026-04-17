@@ -24,6 +24,7 @@ WhisperServerPath := A_ScriptDir "\" IniRead(configPath, "Paths", "WhisperServer
 ModelPath := A_ScriptDir "\" IniRead(configPath, "Paths", "ModelPath", "models\ggml-small.en.bin")
 TempWav := A_ScriptDir "\" IniRead(configPath, "Paths", "TempWav", "temp\recording.wav")
 PushToTalkKey := IniRead(configPath, "Hotkey", "PushToTalk", "CapsLock")
+WhisperThreads := IniRead(configPath, "Whisper", "Threads", "16")
 ServerPort := IniRead(configPath, "Whisper", "ServerPort", "8178")
 
 ; --- Validate Binaries ---
@@ -52,7 +53,7 @@ shiftAltActive := false
 
 ; --- Start Whisper Server (keeps model warm in memory) ---
 ToolTip("Loading whisper model...")
-serverCmd := '"' WhisperServerPath '" -m "' ModelPath '" --port ' ServerPort ' --threads 16'
+serverCmd := '"' WhisperServerPath '" -m "' ModelPath '" --port ' ServerPort ' --threads ' WhisperThreads
 Run(serverCmd, A_ScriptDir, "Hide", &serverPID)
 
 ; Wait for server to be ready by polling the health endpoint
