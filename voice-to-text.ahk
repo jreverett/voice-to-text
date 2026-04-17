@@ -12,14 +12,14 @@ if !A_IsAdmin {
 ; --- Global State ---
 isRecording := false
 isTranscribing := false
-ffmpegPID := 0
-warmupPID := 0
+capturePID := 0
 serverPID := 0
 
 ; --- Load Config ---
 configPath := A_ScriptDir "\config.ini"
 
 MicDevice := IniRead(configPath, "Audio", "MicDevice", "Microphone (Realtek(R) Audio)")
+MicCapturePath := A_ScriptDir "\" IniRead(configPath, "Paths", "MicCapturePath", "bin\mic-capture.exe")
 FfmpegPath := A_ScriptDir "\" IniRead(configPath, "Paths", "FfmpegPath", "bin\ffmpeg.exe")
 WhisperServerPath := A_ScriptDir "\" IniRead(configPath, "Paths", "WhisperServerPath", "bin\whisper-server.exe")
 ModelPath := A_ScriptDir "\" IniRead(configPath, "Paths", "ModelPath", "models\ggml-small.en.bin")
@@ -29,8 +29,8 @@ ExtraFlags := IniRead(configPath, "Whisper", "ExtraFlags", "--no-timestamps --th
 ServerPort := IniRead(configPath, "Whisper", "ServerPort", "8178")
 
 ; --- Validate Binaries ---
-if !FileExist(FfmpegPath) {
-    MsgBox("ffmpeg.exe not found at:`n" FfmpegPath "`n`nRun setup.ps1 first.", "Voice-to-Text", "Icon!")
+if !FileExist(MicCapturePath) {
+    MsgBox("mic-capture.exe not found at:`n" MicCapturePath "`n`nBuild it with: dotnet publish tools\mic-capture -c Release -o bin", "Voice-to-Text", "Icon!")
     ExitApp()
 }
 if !FileExist(WhisperServerPath) {
@@ -80,9 +80,6 @@ if !serverReady {
 }
 ToolTip()
 
-; --- Pre-warm microphone (keeps DirectShow device open so hotkey recording starts instantly) ---
-StartMicWarmup()
-
 ; --- Tray Setup ---
 idleIcon := A_ScriptDir "\icons\idle.ico"
 startingIcon := A_ScriptDir "\icons\starting.ico"
@@ -112,27 +109,6 @@ if isShiftAltMode {
 ; --- Exit Handler ---
 OnExit(CleanUp)
 
-; --- Mic Warmup ---
-StartMicWarmup() {
-    global warmupPID, FfmpegPath, MicDevice
-    ; Record to NUL to keep DirectShow device open and audio pipeline active
-    cmd := 'cmd /c ""' FfmpegPath '" -f dshow -audio_buffer_size 50 -probesize 32 -analyzeduration 0 -i audio="' MicDevice '" -f null NUL"'
-    Run(cmd, A_ScriptDir, "Hide", &warmupPID)
-}
-
-StopMicWarmup() {
-    global warmupPID
-    if warmupPID and ProcessExist(warmupPID) {
-        Run('cmd /c "taskkill /pid ' warmupPID ' 2>nul"', , "Hide")
-        ProcessWaitClose(warmupPID, 2)
-        if ProcessExist(warmupPID) {
-            ProcessClose(warmupPID)
-            ProcessWaitClose(warmupPID, 1)
-        }
-        warmupPID := 0
-    }
-}
-
 ; --- Shift+Alt Combo Handlers ---
 ShiftAltDown(*) {
     global shiftAltActive
@@ -160,41 +136,47 @@ IsHotkeyHeld() {
     return GetKeyState(PushToTalkKey, "P")
 }
 
-; --- Stop ffmpeg and reset to idle ---
+; --- Stop mic-capture and reset to idle ---
 AbortRecording() {
-    global isRecording, ffmpegPID
+    global isRecording, capturePID
     isRecording := false
-    if ffmpegPID {
-        Run('cmd /c "taskkill /pid ' ffmpegPID ' 2>nul"', , "Hide")
-        ProcessWaitClose(ffmpegPID, 2)
-        if ProcessExist(ffmpegPID) {
-            ProcessClose(ffmpegPID)
-            ProcessWaitClose(ffmpegPID, 1)
-        }
-        ffmpegPID := 0
-    }
+    StopCapture()
     ToolTip()
     ResetIcon()
-    StartMicWarmup()
+}
+
+StopCapture() {
+    global capturePID, MicCapturePath
+    ; Signal mic-capture to stop via named event (graceful WAV finalization)
+    Run('"' MicCapturePath '" stop', A_ScriptDir, "Hide")
+    if capturePID {
+        ProcessWaitClose(capturePID, 2)
+        ; Force kill if it didn't stop gracefully
+        if ProcessExist(capturePID) {
+            ProcessClose(capturePID)
+            ProcessWaitClose(capturePID, 1)
+        }
+        capturePID := 0
+    }
 }
 
 ; --- Hotkey Handlers ---
 OnKeyDown(*) {
-    global isRecording, isTranscribing, ffmpegPID
+    global isRecording, isTranscribing, capturePID
 
     if isRecording or isTranscribing
         return
 
     isRecording := true
 
-    ; Delete stale files — retry briefly if locked by a previous ffmpeg
-    ffmpegLog := A_ScriptDir "\temp\ffmpeg_log.txt"
+    ; Delete stale files — retry briefly if locked
+    readyFile := A_ScriptDir "\temp\capture_ready"
     loop 3 {
         try {
             if FileExist(TempWav)
                 FileDelete(TempWav)
-            if FileExist(ffmpegLog)
-                FileDelete(ffmpegLog)
+            if FileExist(readyFile)
+                FileDelete(readyFile)
             break
         }
         Sleep(100)
@@ -205,16 +187,11 @@ OnKeyDown(*) {
         TraySetIcon(startingIcon)
     ToolTip("Starting...")
 
-    ; Kill warmup ffmpeg — device stays warm in the OS audio pipeline briefly
-    StopMicWarmup()
+    ; Launch mic-capture with WASAPI (near-instant startup vs ffmpeg dshow)
+    cmd := '"' MicCapturePath '" record --device "' MicDevice '" --output "' TempWav '" --ready-file "' readyFile '"'
+    Run(cmd, A_ScriptDir, "Hide", &capturePID)
 
-    ; Start recording with low-latency dshow flags, capture stderr to log:
-    ; -audio_buffer_size 50: reduce from default 500ms to 50ms first callback
-    ; -probesize 32 -analyzeduration 0: skip stream analysis (format is known)
-    cmd := 'cmd /c ""' FfmpegPath '" -f dshow -audio_buffer_size 50 -probesize 32 -analyzeduration 0 -i audio="' MicDevice '" -ac 1 -ar 16000 -t 30 -y "' TempWav '" 2>"' ffmpegLog '""'
-    Run(cmd, A_ScriptDir, "Hide", &ffmpegPID)
-
-    ; Wait for ffmpeg stderr to show capture has started (e.g. "Press [q]" or "size=")
+    ; Wait for mic-capture to signal that audio is flowing
     captureReady := false
     waitStart := A_TickCount
     while (A_TickCount - waitStart < 5000) {
@@ -223,21 +200,14 @@ OnKeyDown(*) {
             AbortRecording()
             return
         }
-        if FileExist(ffmpegLog) {
-            try {
-                logContent := FileRead(ffmpegLog)
-                if InStr(logContent, "Press") or InStr(logContent, "size=") {
-                    captureReady := true
-                    break
-                }
-                if InStr(logContent, "Could not") or InStr(logContent, "Error") {
-                    break
-                }
-            }
-        }
-        if !ProcessExist(ffmpegPID)
+        if FileExist(readyFile) {
+            captureReady := true
             break
-        Sleep(30)
+        }
+        ; Bail if mic-capture died
+        if !ProcessExist(capturePID)
+            break
+        Sleep(20)
     }
 
     if !captureReady {
@@ -252,32 +222,23 @@ OnKeyDown(*) {
 }
 
 OnKeyUp(*) {
-    global isRecording, isTranscribing, ffmpegPID
+    global isRecording, isTranscribing, capturePID
 
     if !isRecording
         return
 
     isRecording := false
 
-    ; Stop ffmpeg gracefully
-    if ffmpegPID {
-        Run('cmd /c "taskkill /pid ' ffmpegPID ' 2>nul"', , "Hide")
-        ProcessWaitClose(ffmpegPID, 3)
-        if ProcessExist(ffmpegPID) {
-            ProcessClose(ffmpegPID)
-            ProcessWaitClose(ffmpegPID, 1)
-        }
-        ffmpegPID := 0
-    }
+    ; Stop mic-capture gracefully (signals named event, WAV header finalized)
+    StopCapture()
 
-    ; Wait for file system flush
-    Sleep(300)
+    ; Brief pause for file system flush
+    Sleep(100)
 
     ; Validate recording
     if !FileExist(TempWav) {
         ShowTooltipTimed("No recording captured", 2000)
         ResetIcon()
-        StartMicWarmup()
         return
     }
 
@@ -285,7 +246,6 @@ OnKeyUp(*) {
     if fileSize < 1000 {
         ShowTooltipTimed("Too short - try holding longer", 2000)
         ResetIcon()
-        StartMicWarmup()
         return
     }
 
@@ -294,9 +254,6 @@ OnKeyUp(*) {
     if FileExist(transcribingIcon)
         TraySetIcon(transcribingIcon)
     ToolTip("Transcribing...")
-
-    ; Restart mic warmup while transcription runs
-    StartMicWarmup()
 
     ; POST audio to whisper server via curl (ships with Windows 10+)
     tempOutput := A_ScriptDir "\temp\whisper_output.txt"
@@ -347,23 +304,23 @@ ShowTooltipTimed(text, duration) {
 }
 
 ListDevices(*) {
-    cmd := '"' FfmpegPath '" -list_devices true -f dshow -i dummy 2>&1'
-    wshell := ComObject("WScript.Shell")
-    exec := wshell.Exec('cmd /c ' cmd)
+    ; Use mic-capture for WASAPI device listing
+    tempDevices := A_ScriptDir "\temp\devices.txt"
+    if FileExist(tempDevices)
+        FileDelete(tempDevices)
 
-    output := ""
-    while !exec.StdOut.AtEndOfStream
-        output .= exec.StdOut.ReadLine() "`n"
+    cmd := 'cmd /c ""' MicCapturePath '" list > "' tempDevices '" 2>&1"'
+    RunWait(cmd, A_ScriptDir, "Hide")
 
     devices := "Audio Input Devices:`n`n"
-    inAudio := false
-    for line in StrSplit(output, "`n") {
-        if InStr(line, "DirectShow audio devices")
-            inAudio := true
-        else if InStr(line, "DirectShow video devices")
-            inAudio := false
-        else if inAudio and RegExMatch(line, '"(.+?)"', &m)
-            devices .= "  " m[1] "`n"
+    if FileExist(tempDevices) {
+        content := FileRead(tempDevices)
+        for line in StrSplit(content, "`n") {
+            line := Trim(line)
+            if line != ""
+                devices .= "  " line "`n"
+        }
+        FileDelete(tempDevices)
     }
 
     MsgBox(devices "`nCopy the device name into config.ini [Audio] MicDevice", "Audio Devices")
@@ -374,15 +331,15 @@ OpenConfig(*) {
 }
 
 CleanUp(exitReason, exitCode) {
-    global ffmpegPID, warmupPID, serverPID, isCapsLockHotkey
+    global capturePID, serverPID, isCapsLockHotkey, MicCapturePath
 
-    ; Kill any running ffmpeg
-    if ffmpegPID and ProcessExist(ffmpegPID)
-        ProcessClose(ffmpegPID)
-
-    ; Kill warmup ffmpeg
-    if warmupPID and ProcessExist(warmupPID)
-        ProcessClose(warmupPID)
+    ; Stop mic-capture gracefully
+    Run('"' MicCapturePath '" stop', A_ScriptDir, "Hide")
+    if capturePID and ProcessExist(capturePID) {
+        ProcessWaitClose(capturePID, 1)
+        if ProcessExist(capturePID)
+            ProcessClose(capturePID)
+    }
 
     ; Kill whisper server
     if serverPID and ProcessExist(serverPID)
