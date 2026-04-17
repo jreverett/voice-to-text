@@ -270,8 +270,11 @@ OnKeyUp(*) {
 
     output := ""
     if FileExist(tempOutput) {
-        output := Trim(FileRead(tempOutput))
+        raw := Trim(FileRead(tempOutput))
         FileDelete(tempOutput)
+        ; Join multi-line segments into a single line, collapse whitespace
+        output := RegExReplace(raw, "\s+", " ")
+        output := Trim(output)
     }
 
     if (output = "" or InStr(output, "[BLANK_AUDIO]")) {
