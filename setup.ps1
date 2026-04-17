@@ -204,9 +204,10 @@ try {
 # --- 5. Generate Icons ---
 $iconsDir = Join-Path $scriptDir "icons"
 $iconColors = @{
-    "idle"         = @(46, 204, 113)     # Green
-    "recording"    = @(231, 76, 60)      # Red
-    "transcribing" = @(241, 196, 15)     # Yellow
+    "idle"         = @(34, 197, 94)      # Green
+    "starting"     = @(251, 146, 60)     # Orange
+    "recording"    = @(239, 68, 68)      # Red
+    "transcribing" = @(250, 204, 21)     # Yellow
 }
 
 $needIcons = $false
@@ -227,34 +228,57 @@ if ($needIcons) {
             if (Test-Path $icoPath) { continue }
 
             $rgb = $iconColors[$name]
-            $color = [System.Drawing.Color]::FromArgb($rgb[0], $rgb[1], $rgb[2])
 
-            # Create 32x32 bitmap with filled circle
-            $bmp = New-Object System.Drawing.Bitmap(32, 32)
+            # Create 32x32 ARGB bitmap with filled circle
+            $bmp = New-Object System.Drawing.Bitmap(32, 32, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
             $g = [System.Drawing.Graphics]::FromImage($bmp)
             $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
             $g.Clear([System.Drawing.Color]::Transparent)
 
+            $color = [System.Drawing.Color]::FromArgb(255, $rgb[0], $rgb[1], $rgb[2])
             $brush = New-Object System.Drawing.SolidBrush($color)
             $g.FillEllipse($brush, 2, 2, 28, 28)
 
-            # Add a subtle border
-            $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(60, 0, 0, 0), 1)
+            $darker = [System.Drawing.Color]::FromArgb(255, [Math]::Max(0, $rgb[0]-40), [Math]::Max(0, $rgb[1]-40), [Math]::Max(0, $rgb[2]-40))
+            $pen = New-Object System.Drawing.Pen($darker, 1.5)
             $g.DrawEllipse($pen, 2, 2, 28, 28)
 
             $g.Dispose()
             $brush.Dispose()
             $pen.Dispose()
 
-            # Convert bitmap to icon
-            $icon = [System.Drawing.Icon]::FromHandle($bmp.GetHicon())
-
-            # Save as .ico file
-            $fs = [System.IO.File]::Create($icoPath)
-            try { $icon.Save($fs) }
-            finally { $fs.Close() }
-
+            # Save as proper .ico by writing the binary format directly
+            $ms = New-Object System.IO.MemoryStream
+            $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+            $pngBytes = $ms.ToArray()
+            $ms.Dispose()
             $bmp.Dispose()
+
+            # ICO file format: header + directory entry + PNG data
+            $fs = [System.IO.File]::Create($icoPath)
+            $bw = New-Object System.IO.BinaryWriter($fs)
+
+            # ICO header: reserved(2) + type=1(2) + count=1(2)
+            $bw.Write([UInt16]0)    # Reserved
+            $bw.Write([UInt16]1)    # Type: 1 = ICO
+            $bw.Write([UInt16]1)    # Image count
+
+            # Directory entry: width, height, colors, reserved, planes, bpp, size, offset
+            $bw.Write([byte]32)     # Width
+            $bw.Write([byte]32)     # Height
+            $bw.Write([byte]0)      # Color palette (0 = no palette)
+            $bw.Write([byte]0)      # Reserved
+            $bw.Write([UInt16]1)    # Color planes
+            $bw.Write([UInt16]32)   # Bits per pixel
+            $bw.Write([UInt32]$pngBytes.Length)  # Image data size
+            $bw.Write([UInt32]22)   # Offset to image data (6 header + 16 directory)
+
+            # PNG image data
+            $bw.Write($pngBytes)
+
+            $bw.Close()
+            $fs.Close()
+
             Write-Host "  Created $name.ico"
         }
     } catch {

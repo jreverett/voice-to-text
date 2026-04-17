@@ -85,6 +85,7 @@ StartMicWarmup()
 
 ; --- Tray Setup ---
 idleIcon := A_ScriptDir "\icons\idle.ico"
+startingIcon := A_ScriptDir "\icons\starting.ico"
 recordingIcon := A_ScriptDir "\icons\recording.ico"
 transcribingIcon := A_ScriptDir "\icons\transcribing.ico"
 
@@ -115,7 +116,7 @@ OnExit(CleanUp)
 StartMicWarmup() {
     global warmupPID, FfmpegPath, MicDevice
     ; Record to NUL to keep DirectShow device open and audio pipeline active
-    cmd := 'cmd /c ""' FfmpegPath '" -f dshow -i audio="' MicDevice '" -f null NUL"'
+    cmd := 'cmd /c ""' FfmpegPath '" -f dshow -audio_buffer_size 50 -probesize 32 -analyzeduration 0 -i audio="' MicDevice '" -f null NUL"'
     Run(cmd, A_ScriptDir, "Hide", &warmupPID)
 }
 
@@ -151,6 +152,32 @@ ShiftAltUp(*) {
     }
 }
 
+; --- Check if push-to-talk key is still held ---
+IsHotkeyHeld() {
+    global isShiftAltMode, PushToTalkKey
+    if isShiftAltMode
+        return GetKeyState("LShift", "P") and GetKeyState("LAlt", "P")
+    return GetKeyState(PushToTalkKey, "P")
+}
+
+; --- Stop ffmpeg and reset to idle ---
+AbortRecording() {
+    global isRecording, ffmpegPID
+    isRecording := false
+    if ffmpegPID {
+        Run('cmd /c "taskkill /pid ' ffmpegPID ' 2>nul"', , "Hide")
+        ProcessWaitClose(ffmpegPID, 2)
+        if ProcessExist(ffmpegPID) {
+            ProcessClose(ffmpegPID)
+            ProcessWaitClose(ffmpegPID, 1)
+        }
+        ffmpegPID := 0
+    }
+    ToolTip()
+    ResetIcon()
+    StartMicWarmup()
+}
+
 ; --- Hotkey Handlers ---
 OnKeyDown(*) {
     global isRecording, isTranscribing, ffmpegPID
@@ -160,23 +187,67 @@ OnKeyDown(*) {
 
     isRecording := true
 
-    ; Delete stale temp file
-    if FileExist(TempWav)
-        FileDelete(TempWav)
+    ; Delete stale files — retry briefly if locked by a previous ffmpeg
+    ffmpegLog := A_ScriptDir "\temp\ffmpeg_log.txt"
+    loop 3 {
+        try {
+            if FileExist(TempWav)
+                FileDelete(TempWav)
+            if FileExist(ffmpegLog)
+                FileDelete(ffmpegLog)
+            break
+        }
+        Sleep(100)
+    }
 
-    ; Update tray icon
-    if FileExist(recordingIcon)
-        TraySetIcon(recordingIcon)
+    ; Show loading state immediately
+    if FileExist(startingIcon)
+        TraySetIcon(startingIcon)
+    ToolTip("Starting...")
 
     ; Kill warmup ffmpeg — device stays warm in the OS audio pipeline briefly
     StopMicWarmup()
 
-    ; Start real recording immediately — device re-init is near-instant while warm
-    cmd := 'cmd /c ""' FfmpegPath '" -f dshow -i audio="' MicDevice '" -ac 1 -ar 16000 -t 30 -y "' TempWav '""'
+    ; Start recording with low-latency dshow flags, capture stderr to log:
+    ; -audio_buffer_size 50: reduce from default 500ms to 50ms first callback
+    ; -probesize 32 -analyzeduration 0: skip stream analysis (format is known)
+    cmd := 'cmd /c ""' FfmpegPath '" -f dshow -audio_buffer_size 50 -probesize 32 -analyzeduration 0 -i audio="' MicDevice '" -ac 1 -ar 16000 -t 30 -y "' TempWav '" 2>"' ffmpegLog '""'
     Run(cmd, A_ScriptDir, "Hide", &ffmpegPID)
 
-    ; Short wait for ffmpeg process to start (not full device init)
-    Sleep(150)
+    ; Wait for ffmpeg stderr to show capture has started (e.g. "Press [q]" or "size=")
+    captureReady := false
+    waitStart := A_TickCount
+    while (A_TickCount - waitStart < 5000) {
+        ; Abort if user released the hotkey during startup
+        if !IsHotkeyHeld() {
+            AbortRecording()
+            return
+        }
+        if FileExist(ffmpegLog) {
+            try {
+                logContent := FileRead(ffmpegLog)
+                if InStr(logContent, "Press") or InStr(logContent, "size=") {
+                    captureReady := true
+                    break
+                }
+                if InStr(logContent, "Could not") or InStr(logContent, "Error") {
+                    break
+                }
+            }
+        }
+        if !ProcessExist(ffmpegPID)
+            break
+        Sleep(30)
+    }
+
+    if !captureReady {
+        ShowTooltipTimed("Mic failed to start", 3000)
+        AbortRecording()
+        return
+    }
+
+    if FileExist(recordingIcon)
+        TraySetIcon(recordingIcon)
     ToolTip("Recording...")
 }
 
