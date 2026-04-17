@@ -1,0 +1,4 @@
+bin/
+models/
+temp/
+*.wav
