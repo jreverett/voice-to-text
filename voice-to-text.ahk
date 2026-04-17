@@ -90,12 +90,12 @@ if FileExist(idleIcon)
     TraySetIcon(idleIcon)
 
 A_TrayMenu.Delete()
-A_TrayMenu.Add("List Audio Devices", ListDevices)
+A_TrayMenu.Add("Change Microphone", ListDevices)
 A_TrayMenu.Add("Open Config", OpenConfig)
 A_TrayMenu.Add()
 A_TrayMenu.Add("Reload", (*) => Reload())
 A_TrayMenu.Add("Exit", (*) => ExitApp())
-A_TrayMenu.Default := "List Audio Devices"
+A_TrayMenu.Default := "Change Microphone"
 
 ; --- Register Hotkeys ---
 if isShiftAltMode {
@@ -315,18 +315,48 @@ ListDevices(*) {
     cmd := 'cmd /c ""' MicCapturePath '" list > "' tempDevices '" 2>&1"'
     RunWait(cmd, A_ScriptDir, "Hide")
 
-    devices := "Audio Input Devices:`n`n"
+    deviceList := []
     if FileExist(tempDevices) {
         content := FileRead(tempDevices)
         for line in StrSplit(content, "`n") {
             line := Trim(line)
             if line != ""
-                devices .= "  " line "`n"
+                deviceList.Push(line)
         }
         FileDelete(tempDevices)
     }
 
-    MsgBox(devices "`nCopy the device name into config.ini [Audio] MicDevice", "Audio Devices")
+    if deviceList.Length = 0 {
+        MsgBox("No audio input devices found.", "Audio Devices", "Icon!")
+        return
+    }
+
+    ; Build GUI with listbox and apply button
+    devGui := Gui("+AlwaysOnTop", "Select Audio Device")
+    devGui.Add("Text", , "Select a microphone to use:")
+    lb := devGui.Add("ListBox", "w400 r" Min(deviceList.Length, 8), deviceList)
+
+    ; Pre-select the current device
+    for i, name in deviceList {
+        if name = MicDevice {
+            lb.Choose(i)
+            break
+        }
+    }
+
+    devGui.Add("Button", "w400 Default", "Apply && Reload").OnEvent("Click", ApplyDevice)
+    devGui.Show()
+
+    ApplyDevice(*) {
+        selected := lb.Text
+        if selected = "" {
+            MsgBox("No device selected.", "Audio Devices", "Icon!")
+            return
+        }
+        IniWrite(selected, configPath, "Audio", "MicDevice")
+        devGui.Destroy()
+        Reload()
+    }
 }
 
 OpenConfig(*) {
