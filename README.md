@@ -6,7 +6,7 @@ Local push-to-talk speech-to-text using whisper.cpp. Hold a hotkey, speak, relea
 
 - Windows 10+
 - [AutoHotkey v2](https://www.autohotkey.com/)
-- [.NET 9+ SDK](https://dotnet.microsoft.com/download) (to build mic-capture)
+- [.NET 10+ SDK](https://dotnet.microsoft.com/download) (to build mic-capture)
 
 ## Quick Start
 
