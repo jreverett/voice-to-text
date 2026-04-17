@@ -27,9 +27,29 @@ jobs:
         run: choco install autohotkey -y --no-progress
 
       - name: Compile AHK to exe
+        shell: pwsh
         run: |
-          $ahk2exe = Get-ChildItem "C:\Program Files\AutoHotkey" -Recurse -Filter "Ahk2Exe.exe" | Select-Object -First 1
-          & $ahk2exe.FullName /in "voice-to-text.ahk" /out "build\voice-to-text.exe" /icon "icons\idle.ico" /silent
+          # Search common install locations for Ahk2Exe
+          $searchPaths = @(
+            "C:\Program Files\AutoHotkey",
+            "C:\ProgramData\chocolatey\lib\autohotkey",
+            "C:\ProgramData\chocolatey\bin"
+          )
+          $ahk2exe = $null
+          foreach ($path in $searchPaths) {
+            if (Test-Path $path) {
+              $found = Get-ChildItem $path -Recurse -Filter "Ahk2Exe.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($found) { $ahk2exe = $found.FullName; break }
+            }
+          }
+          # Fallback: search entire drive
+          if (!$ahk2exe) {
+            $found = Get-ChildItem "C:\" -Recurse -Filter "Ahk2Exe.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) { $ahk2exe = $found.FullName }
+          }
+          if (!$ahk2exe) { throw "Ahk2Exe.exe not found" }
+          Write-Host "Found Ahk2Exe at: $ahk2exe"
+          & $ahk2exe /in "voice-to-text.ahk" /out "build\voice-to-text.exe" /icon "icons\idle.ico" /silent
 
       - name: Download whisper.cpp (OpenBLAS)
         shell: pwsh
