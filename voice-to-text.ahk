@@ -20,12 +20,10 @@ configPath := A_ScriptDir "\config.ini"
 
 MicDevice := IniRead(configPath, "Audio", "MicDevice", "Microphone (Realtek(R) Audio)")
 MicCapturePath := A_ScriptDir "\" IniRead(configPath, "Paths", "MicCapturePath", "bin\mic-capture.exe")
-FfmpegPath := A_ScriptDir "\" IniRead(configPath, "Paths", "FfmpegPath", "bin\ffmpeg.exe")
 WhisperServerPath := A_ScriptDir "\" IniRead(configPath, "Paths", "WhisperServerPath", "bin\whisper-server.exe")
 ModelPath := A_ScriptDir "\" IniRead(configPath, "Paths", "ModelPath", "models\ggml-small.en.bin")
 TempWav := A_ScriptDir "\" IniRead(configPath, "Paths", "TempWav", "temp\recording.wav")
 PushToTalkKey := IniRead(configPath, "Hotkey", "PushToTalk", "CapsLock")
-ExtraFlags := IniRead(configPath, "Whisper", "ExtraFlags", "--no-timestamps --threads 16")
 ServerPort := IniRead(configPath, "Whisper", "ServerPort", "8178")
 
 ; --- Validate Binaries ---
@@ -44,6 +42,7 @@ if !FileExist(ModelPath) {
 
 ; --- CapsLock Override ---
 isCapsLockHotkey := (PushToTalkKey = "CapsLock")
+originalCapsLockState := GetKeyState("CapsLock", "T") ? "On" : "Off"
 if isCapsLockHotkey
     SetCapsLockState("AlwaysOff")
 
@@ -334,7 +333,7 @@ OpenConfig(*) {
 }
 
 CleanUp(exitReason, exitCode) {
-    global capturePID, serverPID, isCapsLockHotkey, MicCapturePath
+    global capturePID, serverPID, isCapsLockHotkey, originalCapsLockState, MicCapturePath
 
     ; Stop mic-capture gracefully
     Run('"' MicCapturePath '" stop', A_ScriptDir, "Hide")
@@ -348,9 +347,9 @@ CleanUp(exitReason, exitCode) {
     if serverPID and ProcessExist(serverPID)
         ProcessClose(serverPID)
 
-    ; Restore CapsLock state
+    ; Restore CapsLock to its original state
     if isCapsLockHotkey
-        SetCapsLockState("Off")
+        SetCapsLockState(originalCapsLockState)
 
     ; Clean temp files
     if FileExist(TempWav)
