@@ -4,7 +4,7 @@ Local push-to-talk speech-to-text for Windows. Hold a hotkey, speak, release —
 
 ## Why?
 
-I live in WSL through Windows Terminal. Windows' built-in `Win`+`H` voice typing doesn't play nicely with terminal windows, and most third-party options are cloud-based or paywalled. So I built this — it works anywhere on Windows, runs entirely on your machine, and is free.
+I use Claude Code's `/voice` on Mac and it's great. On Windows it doesn't work nearly as well — especially in WSL through Windows Terminal — and most third-party alternatives are cloud-based or paywalled. So I built this. Works anywhere on Windows, runs entirely on your machine, free.
 
 One of the AI labs will probably ship something better eventually. Until then, this is yours.
 
