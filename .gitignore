@@ -1,4 +1,6 @@
 bin/
+obj/
 models/
 temp/
 *.wav
+.DS_Store
