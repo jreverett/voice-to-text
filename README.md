@@ -2,6 +2,12 @@
 
 Local push-to-talk speech-to-text for Windows. Hold a hotkey, speak, release — transcribed text lands in your clipboard. 100% offline, powered by [whisper.cpp](https://github.com/ggerganov/whisper.cpp).
 
+## Why?
+
+I live in WSL through Windows Terminal. Windows' built-in `Win`+`H` voice typing doesn't play nicely with terminal windows, and most third-party options are cloud-based or paywalled. So I built this — it works anywhere on Windows, runs entirely on your machine, and is free.
+
+One of the AI labs will probably ship something better eventually. Until then, this is yours.
+
 ## Download
 
 Grab the latest pre-built Windows bundle from the [releases page](https://github.com/jreverett/voice-to-text/releases/latest) — no installer, no dependencies to fetch.
