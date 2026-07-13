@@ -15,7 +15,8 @@ Grab the latest pre-built Windows bundle from the [releases page](https://github
 ```powershell
 # 1. Extract voice-to-text.zip somewhere you own (e.g. C:\Tools\voice-to-text\)
 # 2. Double-click voice-to-text.exe
-# 3. Hold Shift+Alt, speak, release — text is in your clipboard, paste with Ctrl+V.
+# 3. The first launch downloads the speech model with visible progress.
+# 4. Hold Shift+Alt, speak, release — text is in your clipboard, paste with Ctrl+V.
 ```
 
 That's it. Skip to [Usage](#usage) or [Configuration](#configuration) if you want to tweak hotkeys or settings.

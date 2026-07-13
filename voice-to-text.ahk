@@ -17,6 +17,12 @@ isRecording := false
 isTranscribing := false
 capturePID := 0
 serverPID := 0
+startupCancelled := false
+startupProcessPID := 0
+startupGui := 0
+startupStatus := 0
+startupDetail := 0
+startupProgress := 0
 
 ; --- Load Config ---
 MicDevice := IniRead(configPath, "Audio", "MicDevice", "")
@@ -38,26 +44,68 @@ if !FileExist(WhisperServerPath) {
     MsgBox("whisper-server.exe not found at:`n" WhisperServerPath "`n`nRun setup.ps1 first.", "Voice-to-Text", "Icon!")
     ExitApp()
 }
+
+ShowStartupWindow()
+
 if !FileExist(ModelPath) {
-    ; First run — download the model automatically
     modelDir := A_ScriptDir "\models"
     if !DirExist(modelDir)
         DirCreate(modelDir)
+
     modelUrl := "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin"
-    ToolTip("Downloading whisper model (~466MB)...`nThis only happens once.")
+    downloadPath := ModelPath ".download"
+    if FileExist(downloadPath)
+        FileDelete(downloadPath)
+
+    SetStartupPhase("Downloading speech model", "Connecting...", false)
+    expectedBytes := GetRemoteFileSize(modelUrl, 487614201)
+
     try {
-        cmd := 'cmd /c "curl -L -o "' ModelPath '" "' modelUrl '""'
-        RunWait(cmd, A_ScriptDir, "Hide")
+        downloadCmd := 'curl.exe -L --fail --retry 2 --output "' downloadPath '" "' modelUrl '"'
+        Run(downloadCmd, A_ScriptDir, "Hide", &startupProcessPID)
+    } catch {
+        startupProcessPID := 0
     }
-    ToolTip()
+
+    while startupProcessPID and ProcessExist(startupProcessPID) {
+        downloadedBytes := FileExist(downloadPath) ? FileGetSize(downloadPath) : 0
+        progressPercent := Min(100, Floor(downloadedBytes * 100 / expectedBytes))
+        downloadedMb := Floor(downloadedBytes / 1048576)
+        expectedMb := Floor(expectedBytes / 1048576)
+        startupProgress.Value := progressPercent
+        startupDetail.Text := downloadedMb " of " expectedMb " MB (" progressPercent "%)"
+        Sleep(100)
+    }
+    startupProcessPID := 0
+
+    if startupCancelled {
+        if FileExist(downloadPath)
+            FileDelete(downloadPath)
+        CloseStartupWindow()
+        ExitApp()
+    }
+
+    downloadComplete := FileExist(downloadPath) and FileGetSize(downloadPath) >= expectedBytes
+    if downloadComplete {
+        SetStartupPhase("Verifying installation", "Preparing the speech model...", false, 100)
+        FileMove(downloadPath, ModelPath, true)
+        Sleep(300)
+    }
+
     if !FileExist(ModelPath) {
-        MsgBox("Failed to download model.`nCheck your internet connection and try again.", "Voice-to-Text", "Icon!")
+        if FileExist(downloadPath)
+            FileDelete(downloadPath)
+        CloseStartupWindow()
+        retryDownload := MsgBox("Failed to download the speech model.`nCheck your internet connection and try again.", "Voice-to-Text", "RetryCancel Icon!")
+        if retryDownload = "Retry"
+            Reload()
         ExitApp()
     }
 }
 
 ; --- First-run mic selection ---
 if MicDevice = "" and !FollowWindowsDefault {
+    CloseStartupWindow()
     ; Detect available devices
     tempDevices := A_ScriptDir "\temp\devices.txt"
     DirCreate(A_ScriptDir "\temp")
@@ -114,8 +162,10 @@ if isCapsLockHotkey
 isShiftAltMode := (PushToTalkKey = "ShiftAlt")
 shiftAltActive := false
 
+OnExit(CleanUp)
+
 ; --- Start Whisper Server (keeps model warm in memory) ---
-ToolTip("Loading whisper model...")
+SetStartupPhase("Starting speech engine", "Loading the speech model. This can take up to 30 seconds.", true)
 serverCmd := '"' WhisperServerPath '" -m "' ModelPath '" --port ' ServerPort ' --threads ' WhisperThreads
 Run(serverCmd, A_ScriptDir, "Hide", &serverPID)
 
@@ -123,6 +173,11 @@ Run(serverCmd, A_ScriptDir, "Hide", &serverPID)
 serverReady := false
 startTime := A_TickCount
 while (A_TickCount - startTime < 30000) {
+    if startupCancelled {
+        CloseStartupWindow()
+        ExitApp()
+    }
+
     try {
         http := ComObject("WinHttp.WinHttpRequest.5.1")
         http.Open("GET", "http://127.0.0.1:" ServerPort, false)
@@ -136,12 +191,18 @@ while (A_TickCount - startTime < 30000) {
 }
 
 if !serverReady {
-    MsgBox("Whisper server failed to start within 30s.`nCheck that port " ServerPort " is available.", "Voice-to-Text", "Icon!")
+    CloseStartupWindow()
     if serverPID and ProcessExist(serverPID)
         ProcessClose(serverPID)
+    retryStartup := MsgBox("The speech engine failed to start within 30 seconds.`nCheck that port " ServerPort " is available.", "Voice-to-Text", "RetryCancel Icon!")
+    if retryStartup = "Retry"
+        Reload()
     ExitApp()
 }
-ToolTip()
+
+SetStartupPhase("Ready", "Voice-to-Text is ready to use.", false, 100)
+Sleep(400)
+CloseStartupWindow()
 
 ; --- Tray Setup ---
 idleIcon := A_ScriptDir "\icons\idle.ico"
@@ -171,9 +232,6 @@ if isShiftAltMode {
     Hotkey(PushToTalkKey, OnKeyDown)
     Hotkey(PushToTalkKey " Up", OnKeyUp)
 }
-
-; --- Exit Handler ---
-OnExit(CleanUp)
 
 ; --- Shift+Alt Combo Handlers ---
 ShiftAltDown(*) {
@@ -361,6 +419,66 @@ OnKeyUp(*) {
 }
 
 ; --- Helper Functions ---
+ShowStartupWindow() {
+    global startupGui, startupStatus, startupDetail, startupProgress
+
+    startupGui := Gui("+AlwaysOnTop -MaximizeBox -MinimizeBox", "Voice-to-Text")
+    startupGui.MarginX := 20
+    startupGui.MarginY := 16
+    startupGui.SetFont("s14 bold")
+    startupGui.Add("Text", "w380 Center", "Voice-to-Text")
+    startupGui.SetFont("s10 norm")
+    startupStatus := startupGui.Add("Text", "w380 Center y+14", "Preparing...")
+    startupDetail := startupGui.Add("Text", "w380 Center y+6", "Starting setup")
+    startupProgress := startupGui.Add("Progress", "w380 h18 y+14 Range0-100", 0)
+    startupGui.Add("Button", "w100 x160 y+14", "Cancel").OnEvent("Click", CancelStartup)
+    startupGui.OnEvent("Close", CancelStartup)
+    startupGui.OnEvent("Escape", CancelStartup)
+    startupGui.Show()
+}
+
+SetStartupPhase(status, detail, marquee := false, progress := 0) {
+    global startupStatus, startupDetail, startupProgress
+
+    startupStatus.Text := status
+    startupDetail.Text := detail
+    SendMessage(0x040A, 0, 0, startupProgress.Hwnd)
+    startupProgress.Opt(marquee ? "+0x8" : "-0x8")
+    if marquee
+        SendMessage(0x040A, 1, 30, startupProgress.Hwnd)
+    else
+        startupProgress.Value := progress
+}
+
+CancelStartup(*) {
+    global startupCancelled, startupProcessPID
+    startupCancelled := true
+    if startupProcessPID and ProcessExist(startupProcessPID)
+        ProcessClose(startupProcessPID)
+}
+
+CloseStartupWindow() {
+    global startupGui, startupProgress
+    if startupGui {
+        SendMessage(0x040A, 0, 0, startupProgress.Hwnd)
+        startupGui.Destroy()
+        startupGui := 0
+    }
+}
+
+GetRemoteFileSize(url, fallbackBytes) {
+    try {
+        http := ComObject("WinHttp.WinHttpRequest.5.1")
+        http.SetTimeouts(5000, 5000, 5000, 5000)
+        http.Open("HEAD", url, false)
+        http.Send()
+        contentLength := Integer(http.GetResponseHeader("Content-Length"))
+        if contentLength > 400 * 1024 * 1024
+            return contentLength
+    }
+    return fallbackBytes
+}
+
 ResetIcon() {
     if FileExist(idleIcon)
         TraySetIcon(idleIcon)
@@ -459,7 +577,7 @@ ToggleAdministratorMode(*) {
         restartScript := A_Temp "\VoiceToText_Restart_" A_TickCount ".cmd"
         try {
             FileAppend('@ping 127.0.0.1 -n 2 > nul`r`n@start "" "' A_ScriptFullPath '"`r`n@del "%~f0"', restartScript)
-            ComObject("Shell.Application").ShellExecute(restartScript, "", A_Temp, "open", 0)
+            RunAsDesktopUser(restartScript, "", A_Temp, "open", 0)
         } catch {
             if FileExist(restartScript)
                 FileDelete(restartScript)
@@ -472,6 +590,12 @@ ToggleAdministratorMode(*) {
     }
 
     ExitApp()
+}
+
+RunAsDesktopUser(filePath, arguments := "", directory := "", operation := "open", show := 1) {
+    static VT_UI4 := 0x13, desktopWindow := ComValue(VT_UI4, 0x8)
+    ComObject("Shell.Application").Windows.Item(desktopWindow).Document.Application
+        .ShellExecute(filePath, arguments, directory, operation, show)
 }
 
 CleanUp(exitReason, exitCode) {

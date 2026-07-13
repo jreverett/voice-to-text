@@ -73,6 +73,6 @@ Flow: `Script start → whisper-server launch → Hotkey Down → mic-capture st
 ## First-Run Experience
 
 On a fresh install from the release zip:
-1. Script downloads `ggml-small.en.bin` (~466MB) via curl on first launch
+1. A setup window downloads `ggml-small.en.bin` (~466MB) with progress and Cancel support
 2. Uses the current Windows default input device
-3. Whisper-server starts, ready to transcribe
+3. Shows the speech-engine loading phase, then closes to the tray when ready
