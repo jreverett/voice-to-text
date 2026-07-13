@@ -15,9 +15,7 @@ Grab the latest pre-built Windows bundle from the [releases page](https://github
 ```powershell
 # 1. Extract voice-to-text.zip somewhere you own (e.g. C:\Tools\voice-to-text\)
 # 2. Double-click voice-to-text.exe
-#    (It auto-elevates for global hotkey support in admin windows like Terminal.)
-# 3. On first launch you'll pick a microphone from a GUI picker.
-# 4. Hold Shift+Alt, speak, release — text is in your clipboard, paste with Ctrl+V.
+# 3. Hold Shift+Alt, speak, release — text is in your clipboard, paste with Ctrl+V.
 ```
 
 That's it. Skip to [Usage](#usage) or [Configuration](#configuration) if you want to tweak hotkeys or settings.
@@ -37,16 +35,18 @@ Edit `config.ini` (next to `voice-to-text.exe`) to customize:
 
 | Section | Setting | Default | Notes |
 |---------|---------|---------|-------|
-| `[Audio]` | `MicDevice` | Set on first run | WASAPI device name; re-pick via tray menu > "List Audio Devices" |
+| `[Audio]` | `FollowWindowsDefault` | `true` | Uses the current Windows input device whenever recording starts |
+| `[Audio]` | `MicDevice` | Empty | Used only when `FollowWindowsDefault=false`; select via the tray menu |
 | `[Hotkey]` | `PushToTalk` | `ShiftAlt` | Also supports single keys: `CapsLock`, `F13`, `ScrollLock` |
 | `[Whisper]` | `Threads` | `8` | Number of CPU threads for whisper inference |
 | `[Whisper]` | `ServerPort` | `8178` | Local port for whisper-server |
 | `[Paths]` | `ModelPath` | `models\ggml-small.en.bin` | Swap for `medium.en` for better accuracy |
 | `[Startup]` | `RunAtLogin` | `true` | Creates/removes a startup shortcut |
+| `[Startup]` | `RunAsAdministrator` | `false` | Enables the hotkey in elevated windows; the tray toggle relaunches the app automatically |
 
 ## Troubleshooting
 
-**Wrong microphone** — Right-click tray icon > "List Audio Devices" and pick again.
+**Wrong microphone** — Check the Windows input device, or right-click the tray icon > "Change Microphone" to set an app-specific override.
 
 **"Too short" on every press** — Verify the selected mic is a capture device, not a speaker/output.
 

@@ -126,6 +126,7 @@ jobs:
           @"
           [Audio]
           MicDevice=
+          FollowWindowsDefault=true
 
           [Paths]
           MicCapturePath=bin\mic-capture.exe
@@ -138,6 +139,7 @@ jobs:
 
           [Startup]
           RunAtLogin=true
+          RunAsAdministrator=false
 
           [Whisper]
           Threads=8

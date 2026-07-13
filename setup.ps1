@@ -160,46 +160,9 @@ if (!(Test-Path $modelFile)) {
     Write-Host "ggml-small.en.bin already present, skipping."
 }
 
-# --- 4. Auto-detect Microphone ---
+# --- 4. Audio Configuration ---
 $configFile = Join-Path $scriptDir "config.ini"
-Write-Host "`n--- Detecting audio devices ---"
-try {
-    $ffmpegOutput = & $ffmpegExe -list_devices true -f dshow -i dummy 2>&1 | Out-String
-
-    $inAudio = $false
-    $firstMic = $null
-    foreach ($line in ($ffmpegOutput -split "`n")) {
-        if ($line -match "DirectShow audio devices") {
-            $inAudio = $true
-            continue
-        }
-        if ($line -match "DirectShow video devices") {
-            break
-        }
-        if ($inAudio -and $line -match '"(.+?)"') {
-            # Skip entries that look like alternative names (contain @device)
-            if ($matches[1] -notmatch "@device") {
-                $firstMic = $matches[1]
-                break
-            }
-        }
-    }
-
-    if ($firstMic) {
-        Write-Host "Detected microphone: $firstMic"
-
-        # Update config.ini with detected mic
-        $content = Get-Content $configFile -Raw
-        $content = $content -replace "MicDevice=.+", "MicDevice=$firstMic"
-        Set-Content $configFile $content -NoNewline
-        Write-Host "Updated config.ini with detected microphone."
-    } else {
-        Write-Host "No audio device auto-detected. Edit config.ini manually."
-        Write-Host "Use 'List Audio Devices' from the tray menu to see available devices."
-    }
-} catch {
-    Write-Warning "Could not auto-detect microphone: $_"
-}
+Write-Host "`n--- Using the Windows default input device ---"
 
 # --- 5. Generate Icons ---
 $iconsDir = Join-Path $scriptDir "icons"
@@ -318,6 +281,5 @@ if ($runAtLogin -eq "true") {
 # --- Done ---
 Write-Host "`n=== Setup complete ===" -ForegroundColor Green
 Write-Host "Next steps:"
-Write-Host "  1. Check config.ini — verify MicDevice is correct"
-Write-Host "  2. Double-click voice-to-text.ahk to start"
-Write-Host "  3. Hold $((Get-Content $configFile | Select-String 'PushToTalk=').ToString().Split('=')[1]) and speak, release to transcribe"
+Write-Host "  1. Double-click voice-to-text.ahk to start"
+Write-Host "  2. Hold $((Get-Content $configFile | Select-String 'PushToTalk=').ToString().Split('=')[1]) and speak, release to transcribe"

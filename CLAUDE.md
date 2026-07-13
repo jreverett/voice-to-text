@@ -33,7 +33,7 @@ Flow: `Script start → whisper-server launch → Hotkey Down → mic-capture st
 
 ## Constraints
 
-- **Windows only** — depends on WASAPI (mic-capture), AutoHotkey v2, and Windows startup shortcuts
+- **Windows only** — depends on WASAPI (mic-capture), AutoHotkey v2, and Windows startup shortcuts. Administrator mode is optional and disabled by default.
 - **CPU inference only** — the hardware has Intel Arc integrated graphics but no prebuilt Vulkan whisper.cpp binary exists. CUDA builds won't work (not NVIDIA). Encode time ~1.5-3s for short clips with `small.en` and 16 threads on OpenBLAS.
 - **No tests** — the script is pure I/O orchestration (real mic, real processes, real HTTP). Mocking everything would test nothing useful. Validate changes manually: hold hotkey, speak, check clipboard.
 
@@ -53,7 +53,8 @@ Flow: `Script start → whisper-server launch → Hotkey Down → mic-capture st
 ## Common Changes
 
 - **Change hotkey**: edit `PushToTalk` in config.ini. Single keys (CapsLock, F13, ScrollLock) work directly. `ShiftAlt` is a special-cased modifier combo.
-- **Change mic**: use tray menu "Change Microphone" — select from a GUI picker, writes to config.ini and reloads automatically.
+- **Change mic**: follows the current Windows default by default; the tray menu can set an app-specific override.
+- **Administrator mode**: toggle "Run as Administrator" from the tray menu. The app relaunches at the selected privilege level.
 - **Improve accuracy**: swap `ModelPath` to a larger model (small.en → medium.en). Larger models are slower but more accurate. Do not downgrade below small.en.
 - **Add GPU support**: if a prebuilt Vulkan whisper.cpp binary becomes available, replace bin/ contents with it. No script changes needed. Intel Arc GPU could provide ~3-5x speedup.
 - **Rebuild mic-capture**: `dotnet publish tools/mic-capture -c Release -o bin` from project root.
@@ -66,12 +67,12 @@ Flow: `Script start → whisper-server launch → Hotkey Down → mic-capture st
 2. Compiles voice-to-text.ahk to exe via AHK2Exe (no AHK install needed)
 3. Downloads whisper.cpp OpenBLAS binaries
 4. Generates tray icons
-5. Creates a default config.ini (empty MicDevice triggers first-run setup)
+5. Creates a default config.ini configured to follow the Windows input device
 6. Packages everything into `voice-to-text-{tag}.zip` and attaches to a GitHub Release
 
 ## First-Run Experience
 
-When `MicDevice` is empty (fresh install from release zip):
+On a fresh install from the release zip:
 1. Script downloads `ggml-small.en.bin` (~466MB) via curl on first launch
-2. Shows a mic selection GUI — user picks their device, config is written, script reloads
+2. Uses the current Windows default input device
 3. Whisper-server starts, ready to transcribe

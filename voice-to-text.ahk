@@ -3,8 +3,11 @@
 #UseHook true
 InstallKeybdHook()
 
-; --- Auto-elevate to admin (required for hooks in elevated windows like Terminal) ---
-if !A_IsAdmin {
+configPath := A_ScriptDir "\config.ini"
+RunAsAdministrator := IniRead(configPath, "Startup", "RunAsAdministrator", "false") = "true"
+
+; --- Optional elevation for hotkeys in elevated windows ---
+if RunAsAdministrator and !A_IsAdmin {
     Run('*RunAs "' A_ScriptFullPath '"')
     ExitApp()
 }
@@ -16,9 +19,8 @@ capturePID := 0
 serverPID := 0
 
 ; --- Load Config ---
-configPath := A_ScriptDir "\config.ini"
-
 MicDevice := IniRead(configPath, "Audio", "MicDevice", "")
+FollowWindowsDefault := IniRead(configPath, "Audio", "FollowWindowsDefault", "true") = "true"
 MicCapturePath := A_ScriptDir "\" IniRead(configPath, "Paths", "MicCapturePath", "bin\mic-capture.exe")
 WhisperServerPath := A_ScriptDir "\" IniRead(configPath, "Paths", "WhisperServerPath", "bin\whisper-server.exe")
 ModelPath := A_ScriptDir "\" IniRead(configPath, "Paths", "ModelPath", "models\ggml-small.en.bin")
@@ -55,7 +57,7 @@ if !FileExist(ModelPath) {
 }
 
 ; --- First-run mic selection ---
-if MicDevice = "" {
+if MicDevice = "" and !FollowWindowsDefault {
     ; Detect available devices
     tempDevices := A_ScriptDir "\temp\devices.txt"
     DirCreate(A_ScriptDir "\temp")
@@ -153,6 +155,9 @@ if FileExist(idleIcon)
 A_TrayMenu.Delete()
 A_TrayMenu.Add("Change Microphone", ListDevices)
 A_TrayMenu.Add("Open Config", OpenConfig)
+A_TrayMenu.Add("Run as Administrator", ToggleAdministratorMode)
+if RunAsAdministrator
+    A_TrayMenu.Check("Run as Administrator")
 A_TrayMenu.Add()
 A_TrayMenu.Add("Reload", (*) => Reload())
 A_TrayMenu.Add("Exit", (*) => ExitApp())
@@ -249,7 +254,8 @@ OnKeyDown(*) {
     ToolTip("Starting...")
 
     ; Launch mic-capture with WASAPI (near-instant startup vs ffmpeg dshow)
-    cmd := '"' MicCapturePath '" record --device "' MicDevice '" --output "' TempWav '" --ready-file "' readyFile '"'
+    deviceArg := FollowWindowsDefault ? "" : ' --device "' MicDevice '"'
+    cmd := '"' MicCapturePath '" record' deviceArg ' --output "' TempWav '" --ready-file "' readyFile '"'
     Run(cmd, A_ScriptDir, "Hide", &capturePID)
 
     ; Wait for mic-capture to signal that audio is flowing
@@ -376,7 +382,7 @@ ListDevices(*) {
     cmd := 'cmd /c ""' MicCapturePath '" list > "' tempDevices '" 2>&1"'
     RunWait(cmd, A_ScriptDir, "Hide")
 
-    deviceList := []
+    deviceList := ["Windows default (follows system changes)"]
     if FileExist(tempDevices) {
         content := FileRead(tempDevices)
         for line in StrSplit(content, "`n") {
@@ -397,11 +403,14 @@ ListDevices(*) {
     devGui.Add("Text", , "Select a microphone to use:")
     lb := devGui.Add("ListBox", "w400 r" Min(deviceList.Length, 8), deviceList)
 
-    ; Pre-select the current device
-    for i, name in deviceList {
-        if name = MicDevice {
-            lb.Choose(i)
-            break
+    if FollowWindowsDefault {
+        lb.Choose(1)
+    } else {
+        for i, name in deviceList {
+            if name = MicDevice {
+                lb.Choose(i)
+                break
+            }
         }
     }
 
@@ -414,7 +423,10 @@ ListDevices(*) {
             MsgBox("No device selected.", "Audio Devices", "Icon!")
             return
         }
-        IniWrite(selected, configPath, "Audio", "MicDevice")
+        useWindowsDefault := selected = "Windows default (follows system changes)"
+        IniWrite(useWindowsDefault ? "true" : "false", configPath, "Audio", "FollowWindowsDefault")
+        if !useWindowsDefault
+            IniWrite(selected, configPath, "Audio", "MicDevice")
         devGui.Destroy()
         Reload()
     }
@@ -422,6 +434,44 @@ ListDevices(*) {
 
 OpenConfig(*) {
     Run(configPath)
+}
+
+ToggleAdministratorMode(*) {
+    global RunAsAdministrator, configPath
+    RunAsAdministrator := !RunAsAdministrator
+    IniWrite(RunAsAdministrator ? "true" : "false", configPath, "Startup", "RunAsAdministrator")
+
+    if RunAsAdministrator {
+        A_TrayMenu.Check("Run as Administrator")
+        ToolTip("Restarting as administrator...")
+        try {
+            Run('*RunAs "' A_ScriptFullPath '"')
+        } catch {
+            RunAsAdministrator := false
+            IniWrite("false", configPath, "Startup", "RunAsAdministrator")
+            A_TrayMenu.Uncheck("Run as Administrator")
+            ShowTooltipTimed("Administrator mode unchanged", 2000)
+            return
+        }
+    } else {
+        A_TrayMenu.Uncheck("Run as Administrator")
+        ToolTip("Restarting without administrator access...")
+        restartScript := A_Temp "\VoiceToText_Restart_" A_TickCount ".cmd"
+        try {
+            FileAppend('@ping 127.0.0.1 -n 2 > nul`r`n@start "" "' A_ScriptFullPath '"`r`n@del "%~f0"', restartScript)
+            ComObject("Shell.Application").ShellExecute(restartScript, "", A_Temp, "open", 0)
+        } catch {
+            if FileExist(restartScript)
+                FileDelete(restartScript)
+            RunAsAdministrator := true
+            IniWrite("true", configPath, "Startup", "RunAsAdministrator")
+            A_TrayMenu.Check("Run as Administrator")
+            ShowTooltipTimed("Administrator mode unchanged", 2000)
+            return
+        }
+    }
+
+    ExitApp()
 }
 
 CleanUp(exitReason, exitCode) {
