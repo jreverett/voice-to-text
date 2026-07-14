@@ -302,13 +302,137 @@ select:disabled {
   font-weight: 600;
 }
 
+.status-cluster {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+}
+
+.control-cluster {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 9px;
+}
+
+.setting-row.busy,
+.setting-row.settling {
+  pointer-events: none;
+}
+
+.setting-row.busy .switch,
+.setting-row.busy select,
+.setting-row.busy input {
+  opacity: 0.55;
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent-strong);
+  border-radius: 50%;
+  animation: spin 800ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .status-text.missing {
   color: var(--muted);
+}
+
+.status-text.ok {
+  color: #22c55e;
+}
+
+.status-text.error {
+  color: #f87171;
 }
 
 .group-note {
   margin: 8px 2px 0;
   font-size: 10px;
+}
+
+.group-note.ok {
+  color: #22c55e;
+}
+
+#groq-key-status {
+  margin: 0;
+  padding: 4px 16px 13px;
+}
+
+.key-input-cluster {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  align-items: center;
+}
+
+input[type="password"] {
+  flex: 0 0 auto;
+  width: 190px;
+  min-height: 30px;
+  padding: 4px 9px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  outline: none;
+  font-size: 11px;
+}
+
+input[type="password"]:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.key-save-button {
+  min-height: 30px;
+  padding: 4px 12px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.key-save-button:hover {
+  border-color: var(--accent);
+}
+
+.key-save-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.inline-alert {
+  display: grid;
+  gap: 3px;
+  margin: 10px 2px 0;
+  padding: 10px 12px;
+  color: #ffd7d7;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.32);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.inline-alert strong {
+  color: #fff0f0;
+  font-size: 12px;
+}
+
+.inline-alert[hidden] {
+  display: none;
 }
 
 .button {

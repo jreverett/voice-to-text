@@ -1,6 +1,6 @@
 # Voice-to-Text
 
-Local push-to-talk speech-to-text for Windows. Hold a hotkey, speak, release — transcribed text lands in your clipboard. 100% offline, powered by [whisper.cpp](https://github.com/ggerganov/whisper.cpp).
+Local push-to-talk speech-to-text for Windows. Hold a hotkey, speak, release — transcribed text lands in your clipboard. Runs offline with [whisper.cpp](https://github.com/ggerganov/whisper.cpp), with an optional Groq API engine for faster cloud transcription.
 
 ## Why?
 
@@ -32,7 +32,7 @@ Releasing during the orange startup phase cancels cleanly.
 
 ## Configuration
 
-Double-click the tray icon, or right-click it and choose **Settings**, to change the microphone, hotkey, startup behaviour, speech model, and thread count. Changes apply automatically; settings that affect the speech engine restart the app and reopen the same pane. Custom push-to-talk shortcuts can be captured directly from the keyboard. The settings window uses the WebView2 runtime included with current Windows 10 and Windows 11 installations.
+Double-click the tray icon, or right-click it and choose **Settings**, to change the microphone, hotkey, startup behaviour, transcription engine, speech model, and thread count. Changes apply automatically; switching between Local Whisper and Groq API happens without restarting the app. Custom push-to-talk shortcuts can be captured directly from the keyboard. The settings window uses the WebView2 runtime included with current Windows 10 and Windows 11 installations.
 
 You can also edit `config.ini` (next to `voice-to-text.exe`) directly:
 
@@ -41,11 +41,16 @@ You can also edit `config.ini` (next to `voice-to-text.exe`) directly:
 | `[Audio]` | `FollowWindowsDefault` | `true` | Uses the current Windows input device whenever recording starts |
 | `[Audio]` | `MicDevice` | Empty | Used only when `FollowWindowsDefault=false`; select via the tray menu |
 | `[Hotkey]` | `PushToTalk` | `ShiftAlt` | Also supports single keys: `CapsLock`, `F13`, `ScrollLock` |
+| `[Transcription]` | `Engine` | `Whisper` | Use `Whisper` for local/offline transcription or `Groq` for Groq API transcription |
 | `[Whisper]` | `Threads` | `8` | Number of CPU threads for whisper inference |
 | `[Whisper]` | `ServerPort` | `8178` | Local port for whisper-server |
+| `[Groq]` | `Model` | `whisper-large-v3-turbo` | Groq speech model; use `whisper-large-v3` for slightly higher accuracy |
+| `[Groq]` | `Language` | `en` | Language hint sent to the Groq speech-to-text endpoint |
 | `[Paths]` | `ModelPath` | `models\ggml-small.en.bin` | Swap for `medium.en` for better accuracy |
 | `[Startup]` | `RunAtLogin` | `true` | Creates/removes a startup shortcut |
 | `[Startup]` | `RunAsAdministrator` | `false` | Enables the hotkey in elevated windows; the tray toggle relaunches the app automatically |
+
+To use Groq API transcription, choose **Settings > Transcription > Engine > Groq API** and paste your key into the API key field (get a free one at [console.groq.com](https://console.groq.com)). The key is stored locally at `%LOCALAPPDATA%\VoiceToText\groq_api_key.txt`, not in `config.ini`. Setting a `GROQ_API_KEY` environment variable also works. Recordings are sent to Groq only when this engine is selected.
 
 Application errors are written to `%LOCALAPPDATA%\VoiceToText\logs\voice-to-text.log`. Open or export the log from **Settings > Advanced > Diagnostics**. The log rotates at 1 MB and retains one previous file.
 
@@ -56,6 +61,8 @@ Application errors are written to `%LOCALAPPDATA%\VoiceToText\logs\voice-to-text
 **"Too short" on every press** — Verify the selected mic is a capture device, not a speaker/output.
 
 **Transcription is slow** — Increase `Threads` in config (up to your physical core count). Current model (`small.en`) takes ~1.5–3s on CPU.
+
+**Groq API transcription fails** — Confirm your API key is saved (Settings shows "A key is saved on this device") and that your Groq account has available quota. The tray tooltip surfaces the API error message on failure.
 
 **SmartScreen warning** — Expected; the bundle is unsigned. Click "More info" > "Run anyway".
 

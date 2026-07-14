@@ -4,13 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Voice-to-Text Settings</title>
-  <link rel="stylesheet" href="settings.css?v=20260714">
+  <link rel="stylesheet" href="settings.css?v=20260714-8">
 </head>
 <body>
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand">
-        <img class="brand-mark" src="app-icon.png?v=20260714" alt="">
+        <img class="brand-mark" src="app-icon.png?v=20260714-8" alt="">
         <div>
           <strong>Voice-to-Text</strong>
           <span>Settings</span>
@@ -25,7 +25,7 @@
 
       <div class="privacy-note">
         <span class="privacy-dot"></span>
-        Audio stays on this device
+        Audio stays local by default
       </div>
     </aside>
 
@@ -43,9 +43,12 @@
               <strong>Follow the Windows input</strong>
               <small>Use whichever microphone is selected in Windows.</small>
             </span>
-            <span class="switch">
-              <input id="follow-windows" type="checkbox">
-              <span class="slider"></span>
+            <span class="control-cluster">
+              <span id="follow-windows-spinner" class="spinner" hidden></span>
+              <span class="switch">
+                <input id="follow-windows" type="checkbox">
+                <span class="slider"></span>
+              </span>
             </span>
           </label>
 
@@ -54,7 +57,10 @@
               <strong>Microphone</strong>
               <small>Used when following Windows is turned off.</small>
             </span>
-            <select id="microphone"></select>
+            <span class="control-cluster">
+              <span id="microphone-spinner" class="spinner" hidden></span>
+              <select id="microphone"></select>
+            </span>
           </label>
         </div>
 
@@ -83,9 +89,12 @@
               <strong>Start with Windows</strong>
               <small>Keep Voice-to-Text ready in the tray.</small>
             </span>
-            <span class="switch">
-              <input id="run-at-login" type="checkbox">
-              <span class="slider"></span>
+            <span class="control-cluster">
+              <span id="run-at-login-spinner" class="spinner" hidden></span>
+              <span class="switch">
+                <input id="run-at-login" type="checkbox">
+                <span class="slider"></span>
+              </span>
             </span>
           </label>
 
@@ -94,9 +103,12 @@
               <strong>Run as administrator</strong>
               <small>Enables shortcuts inside elevated applications.</small>
             </span>
-            <span class="switch">
-              <input id="run-as-admin" type="checkbox">
-              <span class="slider"></span>
+            <span class="control-cluster">
+              <span id="run-as-admin-spinner" class="spinner" hidden></span>
+              <span class="switch">
+                <input id="run-as-admin" type="checkbox">
+                <span class="slider"></span>
+              </span>
             </span>
           </label>
         </div>
@@ -105,20 +117,67 @@
       <section id="transcription" class="settings-page">
         <header>
           <h1>Transcription</h1>
-          <p>Control the local speech recognition model.</p>
+          <p>Choose the speech engine and model.</p>
         </header>
 
-        <h2 class="group-title">Speech model</h2>
+        <h2 class="group-title">Speech engine</h2>
         <div class="settings-group">
+          <label class="setting-row" for="engine">
+            <span>
+              <strong>Engine</strong>
+              <small>Switches transcription method without restarting the app.</small>
+            </span>
+            <select id="engine">
+              <option value="Whisper">Local Whisper</option>
+              <option value="Groq">Groq API</option>
+            </select>
+          </label>
+
+          <div class="setting-row model-summary">
+            <span>
+              <strong id="engine-name">Local Whisper</strong>
+              <small id="engine-description">Runs fully offline on this device.</small>
+            </span>
+            <span class="status-cluster" aria-live="polite">
+              <span id="engine-spinner" class="spinner" hidden></span>
+              <span id="engine-status" class="status-text">Local</span>
+            </span>
+          </div>
+        </div>
+        <p id="engine-note" class="group-note" hidden>Groq API mode sends recordings to Groq. Get a free key at console.groq.com.</p>
+        <div id="groq-key-group" class="settings-group" hidden>
+          <label class="setting-row" for="groq-key">
+            <span>
+              <strong>API key</strong>
+              <small>Stored locally on this device, not in the config file.</small>
+            </span>
+            <span class="key-input-cluster">
+              <input id="groq-key" type="password" autocomplete="off" spellcheck="false" placeholder="gsk_…" />
+              <button id="groq-key-save" type="button" class="key-save-button">Save</button>
+              <button id="groq-key-clear" type="button" class="key-save-button" hidden>Clear</button>
+            </span>
+          </label>
+          <p id="groq-key-status" class="group-note"></p>
+        </div>
+        <div id="engine-error" class="inline-alert" role="alert" hidden>
+          <strong>Groq API key is not available</strong>
+          <span>Enter your Groq API key above (or set GROQ_API_KEY in your environment), then try Groq API again.</span>
+        </div>
+
+        <h2 id="model-group-title" class="group-title">Speech model</h2>
+        <div id="local-model-settings" class="settings-group">
           <label class="setting-row" for="model">
             <span>
               <strong>Model</strong>
               <small>Changing model restarts the speech engine.</small>
             </span>
-            <select id="model">
-              <option value="small.en">Small English</option>
-              <option value="medium.en">Medium English</option>
-            </select>
+            <span class="control-cluster">
+              <span id="model-spinner" class="spinner" hidden></span>
+              <select id="model">
+                <option value="small.en">Small English</option>
+                <option value="medium.en">Medium English</option>
+              </select>
+            </span>
           </label>
 
           <div class="setting-row model-summary">
@@ -145,7 +204,10 @@
               <strong>CPU threads</strong>
               <small>Changing this restarts the speech engine.</small>
             </span>
-            <input id="threads" type="number" min="1" max="64" step="1">
+            <span class="control-cluster">
+              <span id="threads-spinner" class="spinner" hidden></span>
+              <input id="threads" type="number" min="1" max="64" step="1">
+            </span>
           </label>
         </div>
 
@@ -188,6 +250,6 @@
     </div>
   </div>
 
-  <script src="settings.js?v=20260714-2"></script>
+  <script src="settings.js?v=20260714-8"></script>
 </body>
 </html>

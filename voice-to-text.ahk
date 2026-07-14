@@ -6,6 +6,7 @@ InstallKeybdHook()
 
 configPath := A_ScriptDir "\config.ini"
 logPath := EnvGet("LOCALAPPDATA") "\VoiceToText\logs\voice-to-text.log"
+groqKeyPath := EnvGet("LOCALAPPDATA") "\VoiceToText\groq_api_key.txt"
 RunAsAdministrator := IniRead(configPath, "Startup", "RunAsAdministrator", "false") = "true"
 settingsLaunchArgument := A_Args.Length > 0 and A_Args[1] = "--settings" ? " --settings" : ""
 InitializeLogging()
@@ -45,22 +46,32 @@ WhisperServerPath := A_ScriptDir "\" IniRead(configPath, "Paths", "WhisperServer
 ModelPath := A_ScriptDir "\" IniRead(configPath, "Paths", "ModelPath", "models\ggml-small.en.bin")
 TempWav := A_ScriptDir "\" IniRead(configPath, "Paths", "TempWav", "temp\recording.wav")
 PushToTalkKey := IniRead(configPath, "Hotkey", "PushToTalk", "CapsLock")
+TranscriptionEngine := NormalizeTranscriptionEngine(IniRead(configPath, "Transcription", "Engine", "Whisper"))
 WhisperThreads := IniRead(configPath, "Whisper", "Threads", "16")
 ServerPort := IniRead(configPath, "Whisper", "ServerPort", "8178")
+GroqModel := IniRead(configPath, "Groq", "Model", "whisper-large-v3-turbo")
+GroqLanguage := IniRead(configPath, "Groq", "Language", "en")
+lastTranscriptionError := ""
 
 ; --- Validate Binaries ---
 if !FileExist(MicCapturePath) {
     MsgBox("mic-capture.exe not found at:`n" MicCapturePath "`n`nBuild it with: dotnet publish tools\mic-capture -c Release -o bin", "Voice-to-Text", "Icon!")
     ExitApp()
 }
-if !FileExist(WhisperServerPath) {
+if IsWhisperEngine() and !FileExist(WhisperServerPath) {
     MsgBox("whisper-server.exe not found at:`n" WhisperServerPath "`n`nRun setup.ps1 first.", "Voice-to-Text", "Icon!")
     ExitApp()
 }
 
 ShowStartupWindow()
 
-if !FileExist(ModelPath) {
+if IsGroqEngine() and GetGroqApiKey() = "" {
+    CloseStartupWindow()
+    MsgBox("Groq API transcription requires an API key. Enter one in Settings or set the GROQ_API_KEY environment variable.", "Voice-to-Text", "Icon!")
+    ExitApp()
+}
+
+if IsWhisperEngine() and !FileExist(ModelPath) {
     SplitPath(ModelPath, , &modelDir)
     if !DirExist(modelDir)
         DirCreate(modelDir)
@@ -186,40 +197,86 @@ shiftAltActive := false
 
 OnExit(CleanUp)
 
-; --- Start Whisper Server (keeps model warm in memory) ---
-SetStartupPhase("Starting speech engine", "Loading the speech model. This can take up to 30 seconds.", true)
-serverCmd := '"' WhisperServerPath '" -m "' ModelPath '" --port ' ServerPort ' --threads ' WhisperThreads
-Run(serverCmd, A_ScriptDir, "Hide", &serverPID)
-
-; Wait for server to be ready by polling the health endpoint
-serverReady := false
-startTime := A_TickCount
-while (A_TickCount - startTime < 30000) {
+if IsWhisperEngine() {
+    ; --- Start Whisper Server (keeps model warm in memory) ---
+    SetStartupPhase("Starting speech engine", "Loading the speech model. This can take up to 30 seconds.", true)
+    serverReady := StartWhisperServer(30000, () => startupCancelled)
     if startupCancelled {
         CloseStartupWindow()
         ExitApp()
     }
 
-    try {
-        http := ComObject("WinHttp.WinHttpRequest.5.1")
-        http.Open("GET", "http://127.0.0.1:" ServerPort, false)
-        http.Send()
-        if (http.Status = 200) {
-            serverReady := true
-            break
-        }
+    if !serverReady {
+        CloseStartupWindow()
+        StopWhisperServer()
+        retryStartup := MsgBox("The speech engine failed to start within 30 seconds.`nCheck that port " ServerPort " is available.", "Voice-to-Text", "RetryCancel Icon!")
+        if retryStartup = "Retry"
+            Reload()
+        ExitApp()
     }
-    Sleep(500)
+} else {
+    SetStartupPhase("Checking Groq API settings", "Using Groq for transcription.", false, 100)
+    Sleep(300)
+    if startupCancelled {
+        CloseStartupWindow()
+        ExitApp()
+    }
 }
 
-if !serverReady {
-    CloseStartupWindow()
+StartWhisperServer(timeoutMs := 30000, shouldCancel := 0) {
+    global serverPID, WhisperServerPath, ModelPath, ServerPort, WhisperThreads
+    if serverPID and ProcessExist(serverPID)
+        return true
+
+    serverCmd := '"' WhisperServerPath '" -m "' ModelPath '" --port ' ServerPort ' --threads ' WhisperThreads
+    Run(serverCmd, A_ScriptDir, "Hide", &serverPID)
+
+    startTime := A_TickCount
+    while (A_TickCount - startTime < timeoutMs) {
+        if IsObject(shouldCancel) and shouldCancel.Call()
+            return false
+
+        try {
+            http := ComObject("WinHttp.WinHttpRequest.5.1")
+            http.Open("GET", "http://127.0.0.1:" ServerPort, false)
+            http.Send()
+            if (http.Status = 200)
+                return true
+        }
+        Sleep(500)
+    }
+
+    return false
+}
+
+StopWhisperServer() {
+    global serverPID
     if serverPID and ProcessExist(serverPID)
         ProcessClose(serverPID)
-    retryStartup := MsgBox("The speech engine failed to start within 30 seconds.`nCheck that port " ServerPort " is available.", "Voice-to-Text", "RetryCancel Icon!")
-    if retryStartup = "Retry"
-        Reload()
-    ExitApp()
+    serverPID := 0
+}
+
+SwitchTranscriptionEngine(engine) {
+    global TranscriptionEngine, configPath, WhisperServerPath, ModelPath
+    if engine = TranscriptionEngine
+        return
+
+    if engine = "Groq" {
+        if GetGroqApiKey() = ""
+            throw ValueError("GROQ_API_KEY is not set")
+        StopWhisperServer()
+    } else {
+        if !FileExist(WhisperServerPath)
+            throw ValueError("whisper-server.exe not found")
+        if !FileExist(ModelPath)
+            throw ValueError("Speech model not found")
+        if !StartWhisperServer(30000)
+            throw ValueError("The speech engine failed to start")
+    }
+
+    TranscriptionEngine := engine
+    IniWrite(engine, configPath, "Transcription", "Engine")
+    WriteLog("INFO", "Transcription engine changed to " engine)
 }
 
 SetStartupPhase("Ready", "Voice-to-Text is ready to use.", false, 100)
@@ -450,7 +507,7 @@ OnKeyDown(*) {
 }
 
 OnKeyUp(*) {
-    global isRecording, isTranscribing, capturePID
+    global isRecording, isTranscribing, capturePID, lastTranscriptionError
 
     if !isRecording
         return
@@ -477,36 +534,15 @@ OnKeyUp(*) {
         return
     }
 
-    ; Transcribe via whisper server (model already loaded — no startup cost)
     isTranscribing := true
     if FileExist(transcribingIcon)
         TraySetIcon(transcribingIcon)
     ToolTip("Transcribing...")
 
-    ; POST audio to whisper server via curl (ships with Windows 10+)
-    tempOutput := A_ScriptDir "\temp\whisper_output.txt"
-    if FileExist(tempOutput)
-        FileDelete(tempOutput)
-
-    curlCmd := 'cmd /c "curl -s -X POST'
-        . " http://127.0.0.1:" ServerPort "/inference"
-        . ' -F "file=@' TempWav '"'
-        . ' -F "response_format=text"'
-        . ' -F "temperature=0.0"'
-        . ' > "' tempOutput '" 2>&1"'
-    RunWait(curlCmd, A_ScriptDir, "Hide")
-
-    output := ""
-    if FileExist(tempOutput) {
-        raw := Trim(FileRead(tempOutput))
-        FileDelete(tempOutput)
-        ; Join multi-line segments into a single line, collapse whitespace
-        output := RegExReplace(raw, "\s+", " ")
-        output := Trim(output)
-    }
+    output := TranscribeAudio(TempWav)
 
     if (output = "" or InStr(output, "[BLANK_AUDIO]")) {
-        ShowTooltipTimed("No speech detected", 2000)
+        ShowTooltipTimed(lastTranscriptionError != "" ? lastTranscriptionError : "No speech detected", 2000)
         isTranscribing := false
         ResetIcon()
         return
@@ -522,6 +558,155 @@ OnKeyUp(*) {
 }
 
 ; --- Helper Functions ---
+NormalizeTranscriptionEngine(value) {
+    value := StrLower(String(value))
+    switch value {
+        case "groq", "grok", "xai":
+            return "Groq"
+        default:
+            return "Whisper"
+    }
+}
+
+IsWhisperEngine() {
+    global TranscriptionEngine
+    return TranscriptionEngine = "Whisper"
+}
+
+IsGroqEngine() {
+    global TranscriptionEngine
+    return TranscriptionEngine = "Groq"
+}
+
+GetGroqApiKey() {
+    global groqKeyPath
+    if FileExist(groqKeyPath) {
+        stored := Trim(FileRead(groqKeyPath))
+        if stored != ""
+            return stored
+    }
+    return EnvGet("GROQ_API_KEY")
+}
+
+TranscribeAudio(audioPath) {
+    if IsGroqEngine()
+        return TranscribeWithGroq(audioPath)
+    return TranscribeWithWhisper(audioPath)
+}
+
+TranscribeWithWhisper(audioPath) {
+    global ServerPort, lastTranscriptionError
+    lastTranscriptionError := ""
+    tempOutput := A_ScriptDir "\temp\whisper_output.txt"
+    if FileExist(tempOutput)
+        FileDelete(tempOutput)
+
+    curlCmd := 'cmd /c "curl -s -X POST'
+        . " http://127.0.0.1:" ServerPort "/inference"
+        . ' -F "file=@' audioPath '"'
+        . ' -F "response_format=text"'
+        . ' -F "temperature=0.0"'
+        . ' > "' tempOutput '" 2>&1"'
+    exitCode := RunWait(curlCmd, A_ScriptDir, "Hide")
+
+    raw := ""
+    if FileExist(tempOutput) {
+        raw := Trim(FileRead(tempOutput))
+        FileDelete(tempOutput)
+    }
+
+    if exitCode != 0 {
+        lastTranscriptionError := "Transcription failed"
+        LogError("Whisper transcription failed", raw)
+        return ""
+    }
+
+    return NormalizeTranscriptText(raw)
+}
+
+TranscribeWithGroq(audioPath) {
+    global GroqModel, GroqLanguage, lastTranscriptionError
+    lastTranscriptionError := ""
+    apiKey := GetGroqApiKey()
+    if apiKey = "" {
+        lastTranscriptionError := "GROQ_API_KEY is not set"
+        return ""
+    }
+
+    tempOutput := A_ScriptDir "\temp\groq_output.txt"
+    if FileExist(tempOutput)
+        FileDelete(tempOutput)
+
+    curlCmd := 'cmd /c "curl -sS -X POST https://api.groq.com/openai/v1/audio/transcriptions'
+        . ' -H "Authorization: Bearer ' . apiKey . '"'
+        . ' -F "model=' . GroqModel . '"'
+        . ' -F "language=' . GroqLanguage . '"'
+        . ' -F "temperature=0"'
+        . ' -F "response_format=text"'
+        . ' -F "file=@' . audioPath . '"'
+        . ' -w "\n__HTTP__%{http_code}"'
+        . ' > "' tempOutput '" 2>&1"'
+    exitCode := RunWait(curlCmd, A_ScriptDir, "Hide")
+
+    raw := ""
+    if FileExist(tempOutput) {
+        raw := Trim(FileRead(tempOutput))
+        FileDelete(tempOutput)
+    }
+
+    status := 0
+    body := raw
+    if RegExMatch(raw, "__HTTP__(\d+)\s*$", &statusMatch) {
+        status := Integer(statusMatch[1])
+        body := Trim(SubStr(raw, 1, statusMatch.Pos - 1))
+    }
+
+    if exitCode != 0 and status = 0 {
+        lastTranscriptionError := "Groq request failed (network or curl error)"
+        LogError("Groq request failed", raw)
+        return ""
+    }
+
+    if status != 200 {
+        detail := ParseJsonString(body, "message")
+        lastTranscriptionError := detail != "" ? detail : "Groq API returned HTTP " status
+        LogError("Groq API returned HTTP " status, body)
+        return ""
+    }
+
+    output := NormalizeTranscriptText(body)
+    if output = "" {
+        lastTranscriptionError := "Groq returned no transcript"
+        LogError("Groq response empty", body)
+        return ""
+    }
+
+    return output
+}
+
+NormalizeTranscriptText(text) {
+    text := RegExReplace(Trim(text), "\s+", " ")
+    return Trim(text)
+}
+
+ParseJsonString(json, propertyName) {
+    pattern := '"' . propertyName . '"\s*:\s*"((?:\\.|[^"\\])*)"'
+    if RegExMatch(json, pattern, &match)
+        return JsonUnescape(match[1])
+    return ""
+}
+
+JsonUnescape(value) {
+    while RegExMatch(value, "\\u([0-9A-Fa-f]{4})", &match)
+        value := StrReplace(value, match[0], Chr(Integer("0x" match[1])))
+    value := StrReplace(value, '\"', '"')
+    value := StrReplace(value, '\n', "`n")
+    value := StrReplace(value, '\r', "`r")
+    value := StrReplace(value, '\t', "`t")
+    value := StrReplace(value, '\\', '\')
+    return value
+}
+
 ShowStartupWindow() {
     global startupGui, startupStatus, startupDetail, startupProgress
 
@@ -815,6 +1000,9 @@ InitializeSettings(showWhenReady := false) {
             GetWindowsDefaultAudioDevice: GetWindowsDefaultAudioDevice,
             GetCurrentModel: SettingsGetCurrentModel,
             IsModelInstalled: SettingsIsModelInstalled,
+            HasGroqApiKey: SettingsHasGroqApiKey,
+            GetGroqApiKeyHint: SettingsGetGroqApiKeyHint,
+            SetGroqApiKey: SettingsSetGroqApiKey,
             LogError: SettingsLogError,
             OpenRawConfig: OpenConfig,
             OpenLog: SettingsOpenLog,
@@ -825,7 +1013,7 @@ InitializeSettings(showWhenReady := false) {
         }
         settingsWebView.AddHostObjectToScript("settings", settingsHost)
         settingsWebView.SetVirtualHostNameToFolderMapping("voice-to-text.local", A_ScriptDir "\ui", 1)
-        settingsWebView.Navigate("https://voice-to-text.local/settings.html?v=20260714-2")
+        settingsWebView.Navigate("https://voice-to-text.local/settings.html?v=20260714-11")
     } catch as error {
         LogError("Opening Settings", error)
         showError := settingsShowWhenReady
@@ -920,6 +1108,38 @@ SettingsIsModelInstalled(modelKey) {
     return modelPath != "" and FileExist(modelPath) ? "true" : "false"
 }
 
+SettingsHasGroqApiKey() {
+    return GetGroqApiKey() != "" ? "true" : "false"
+}
+
+SettingsGetGroqApiKeyHint() {
+    key := GetGroqApiKey()
+    if key = ""
+        return ""
+    if StrLen(key) <= 8
+        return "••••"
+    return SubStr(key, 1, 4) "…" SubStr(key, -4)
+}
+
+SettingsSetGroqApiKey(value) {
+    global groqKeyPath
+    key := Trim(String(value))
+    SplitPath(groqKeyPath, , &keyDir)
+    if !DirExist(keyDir)
+        DirCreate(keyDir)
+    if key = "" {
+        if FileExist(groqKeyPath)
+            FileDelete(groqKeyPath)
+        WriteLog("INFO", "Groq API key cleared")
+        return "cleared"
+    }
+    if FileExist(groqKeyPath)
+        FileDelete(groqKeyPath)
+    FileAppend(key, groqKeyPath, "UTF-8-RAW")
+    WriteLog("INFO", "Groq API key saved")
+    return "saved"
+}
+
 SettingsSetWindowTitle(title) {
     global settingsGui
     if settingsGui
@@ -951,7 +1171,7 @@ SettingsExportLog() {
 }
 
 SettingsUpdateSetting(setting, value) {
-    global configPath, FollowWindowsDefault, MicDevice, PushToTalkKey, WhisperThreads, ModelPath, RunAsAdministrator
+    global configPath, FollowWindowsDefault, MicDevice, PushToTalkKey, TranscriptionEngine, WhisperThreads, ModelPath, RunAsAdministrator
     setting := String(setting)
     value := String(value)
 
@@ -981,6 +1201,12 @@ SettingsUpdateSetting(setting, value) {
                 ApplyPushToTalkHotkey(value)
                 IniWrite(value, configPath, "Hotkey", "PushToTalk")
                 WriteLog("INFO", "Push-to-talk shortcut changed to " value)
+            }
+        case "engine":
+            engine := NormalizeTranscriptionEngine(value)
+            if engine != TranscriptionEngine {
+                SwitchTranscriptionEngine(engine)
+                return "updated"
             }
         case "threads":
             try threadCount := Integer(value)

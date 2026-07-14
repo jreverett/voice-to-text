@@ -142,9 +142,16 @@ jobs:
           RunAtLogin=true
           RunAsAdministrator=false
 
+          [Transcription]
+          Engine=Whisper
+
           [Whisper]
           Threads=8
           ServerPort=8178
+
+          [Groq]
+          Model=whisper-large-v3-turbo
+          Language=en
           "@ | Set-Content "build\config.ini" -NoNewline
 
       - name: Create directory structure
