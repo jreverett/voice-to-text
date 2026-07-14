@@ -1,14 +1,19 @@
 #Requires AutoHotkey v2.0
 #SingleInstance Force
 #UseHook true
+#Include lib\WebView2\WebView2.ahk
 InstallKeybdHook()
 
 configPath := A_ScriptDir "\config.ini"
+logPath := EnvGet("LOCALAPPDATA") "\VoiceToText\logs\voice-to-text.log"
 RunAsAdministrator := IniRead(configPath, "Startup", "RunAsAdministrator", "false") = "true"
+settingsLaunchArgument := A_Args.Length > 0 and A_Args[1] = "--settings" ? " --settings" : ""
+InitializeLogging()
+OnError(LogUnhandledError)
 
 ; --- Optional elevation for hotkeys in elevated windows ---
 if RunAsAdministrator and !A_IsAdmin {
-    Run('*RunAs "' A_ScriptFullPath '"')
+    Run('*RunAs "' A_ScriptFullPath '"' settingsLaunchArgument)
     ExitApp()
 }
 
@@ -23,6 +28,14 @@ startupGui := 0
 startupStatus := 0
 startupDetail := 0
 startupProgress := 0
+settingsGui := 0
+settingsHost := 0
+settingsController := 0
+settingsWebView := 0
+settingsReady := false
+settingsShowWhenReady := false
+settingsLargeIcon := 0
+settingsSmallIcon := 0
 
 ; --- Load Config ---
 MicDevice := IniRead(configPath, "Audio", "MicDevice", "")
@@ -48,22 +61,30 @@ if !FileExist(WhisperServerPath) {
 ShowStartupWindow()
 
 if !FileExist(ModelPath) {
-    modelDir := A_ScriptDir "\models"
+    SplitPath(ModelPath, , &modelDir)
     if !DirExist(modelDir)
         DirCreate(modelDir)
 
-    modelUrl := "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin"
+    modelDetails := GetModelDetails(ModelPath)
+    if !modelDetails {
+        CloseStartupWindow()
+        MsgBox("The selected model cannot be downloaded automatically:`n" ModelPath, "Voice-to-Text", "Icon!")
+        ExitApp()
+    }
+
+    modelUrl := modelDetails.Url
     downloadPath := ModelPath ".download"
     if FileExist(downloadPath)
         FileDelete(downloadPath)
 
     SetStartupPhase("Downloading speech model", "Connecting...", false)
-    expectedBytes := GetRemoteFileSize(modelUrl, 487614201)
+    expectedBytes := GetRemoteFileSize(modelUrl, modelDetails.ExpectedBytes)
 
     try {
         downloadCmd := 'curl.exe -L --fail --retry 2 --output "' downloadPath '" "' modelUrl '"'
         Run(downloadCmd, A_ScriptDir, "Hide", &startupProcessPID)
-    } catch {
+    } catch as downloadError {
+        LogError("Starting model download", downloadError)
         startupProcessPID := 0
     }
 
@@ -160,6 +181,7 @@ if isCapsLockHotkey
 
 ; --- Shift+Alt combo state ---
 isShiftAltMode := (PushToTalkKey = "ShiftAlt")
+isCustomHotkey := !HasValue(["ShiftAlt", "CapsLock", "F13", "ScrollLock"], PushToTalkKey)
 shiftAltActive := false
 
 OnExit(CleanUp)
@@ -215,22 +237,99 @@ if FileExist(idleIcon)
 
 A_TrayMenu.Delete()
 A_TrayMenu.Add("Change Microphone", ListDevices)
-A_TrayMenu.Add("Open Config", OpenConfig)
+A_TrayMenu.Add("Settings", ShowSettings)
 A_TrayMenu.Add("Run as Administrator", ToggleAdministratorMode)
 if RunAsAdministrator
     A_TrayMenu.Check("Run as Administrator")
 A_TrayMenu.Add()
 A_TrayMenu.Add("Reload", (*) => Reload())
 A_TrayMenu.Add("Exit", (*) => ExitApp())
-A_TrayMenu.Default := "Change Microphone"
+A_TrayMenu.Default := "Settings"
+A_TrayMenu.ClickCount := 2
+
+if A_Args.Length > 0 and A_Args[1] = "--settings"
+    SetTimer(ShowSettings, -1)
+else
+    SetTimer(InitializeSettings, -1)
 
 ; --- Register Hotkeys ---
-if isShiftAltMode {
-    Hotkey("~*LAlt", ShiftAltDown)
-    Hotkey("~*LAlt Up", ShiftAltUp)
-} else {
-    Hotkey(PushToTalkKey, OnKeyDown)
-    Hotkey(PushToTalkKey " Up", OnKeyUp)
+RegisterPushToTalkHotkey()
+
+RegisterPushToTalkHotkey() {
+    global isShiftAltMode, isCustomHotkey, PushToTalkKey
+    if isShiftAltMode {
+        Hotkey("~*LAlt", ShiftAltDown)
+        Hotkey("~*LAlt Up", ShiftAltUp)
+        Hotkey("~*LAlt", "On")
+        Hotkey("~*LAlt Up", "On")
+    } else if isCustomHotkey {
+        Hotkey(PushToTalkKey, OnKeyDown)
+        Hotkey("~*" GetHotkeyBaseKey(PushToTalkKey) " Up", OnKeyUp)
+        Hotkey(PushToTalkKey, "On")
+        Hotkey("~*" GetHotkeyBaseKey(PushToTalkKey) " Up", "On")
+    } else {
+        Hotkey(PushToTalkKey, OnKeyDown)
+        Hotkey(PushToTalkKey " Up", OnKeyUp)
+        Hotkey(PushToTalkKey, "On")
+        Hotkey(PushToTalkKey " Up", "On")
+    }
+}
+
+UnregisterPushToTalkHotkey() {
+    global isShiftAltMode, isCustomHotkey, PushToTalkKey
+    if isShiftAltMode {
+        Hotkey("~*LAlt", "Off")
+        Hotkey("~*LAlt Up", "Off")
+    } else if isCustomHotkey {
+        Hotkey(PushToTalkKey, "Off")
+        Hotkey("~*" GetHotkeyBaseKey(PushToTalkKey) " Up", "Off")
+    } else {
+        Hotkey(PushToTalkKey, "Off")
+        Hotkey(PushToTalkKey " Up", "Off")
+    }
+}
+
+ApplyPushToTalkHotkey(newHotkey) {
+    global PushToTalkKey, isShiftAltMode, isCustomHotkey, isCapsLockHotkey
+    global originalCapsLockState, shiftAltActive, isRecording
+
+    oldHotkey := PushToTalkKey
+    oldShiftAltMode := isShiftAltMode
+    oldCustomHotkey := isCustomHotkey
+    oldCapsLockHotkey := isCapsLockHotkey
+    oldCapsLockState := originalCapsLockState
+
+    if isRecording
+        AbortRecording()
+    shiftAltActive := false
+    UnregisterPushToTalkHotkey()
+    if oldCapsLockHotkey
+        SetCapsLockState(oldCapsLockState)
+
+    PushToTalkKey := newHotkey
+    isShiftAltMode := newHotkey = "ShiftAlt"
+    isCustomHotkey := !HasValue(["ShiftAlt", "CapsLock", "F13", "ScrollLock"], newHotkey)
+    isCapsLockHotkey := newHotkey = "CapsLock"
+    if isCapsLockHotkey {
+        originalCapsLockState := GetKeyState("CapsLock", "T") ? "On" : "Off"
+        SetCapsLockState("AlwaysOff")
+    }
+
+    try {
+        RegisterPushToTalkHotkey()
+    } catch as error {
+        if isCapsLockHotkey
+            SetCapsLockState(originalCapsLockState)
+        PushToTalkKey := oldHotkey
+        isShiftAltMode := oldShiftAltMode
+        isCustomHotkey := oldCustomHotkey
+        isCapsLockHotkey := oldCapsLockHotkey
+        originalCapsLockState := oldCapsLockState
+        if isCapsLockHotkey
+            SetCapsLockState("AlwaysOff")
+        RegisterPushToTalkHotkey()
+        throw error
+    }
 }
 
 ; --- Shift+Alt Combo Handlers ---
@@ -257,7 +356,11 @@ IsHotkeyHeld() {
     global isShiftAltMode, PushToTalkKey
     if isShiftAltMode
         return GetKeyState("LShift", "P") and GetKeyState("LAlt", "P")
-    return GetKeyState(PushToTalkKey, "P")
+    return GetKeyState(GetHotkeyBaseKey(PushToTalkKey), "P")
+}
+
+GetHotkeyBaseKey(hotkeyValue) {
+    return RegExReplace(hotkeyValue, "^[\^!+#]+")
 }
 
 ; --- Stop mic-capture and reset to idle ---
@@ -479,6 +582,82 @@ GetRemoteFileSize(url, fallbackBytes) {
     return fallbackBytes
 }
 
+InitializeLogging() {
+    global logPath
+    SplitPath(logPath, , &logDirectory)
+    if !DirExist(logDirectory)
+        DirCreate(logDirectory)
+    RotateLogIfNeeded()
+    WriteLog("INFO", "Voice-to-Text started")
+}
+
+RotateLogIfNeeded() {
+    global logPath
+    if !FileExist(logPath) or FileGetSize(logPath) < 1048576
+        return
+
+    previousLogPath := StrReplace(logPath, ".log", ".previous.log")
+    if FileExist(previousLogPath)
+        FileDelete(previousLogPath)
+    FileMove(logPath, previousLogPath)
+}
+
+WriteLog(level, message) {
+    global logPath
+    try {
+        RotateLogIfNeeded()
+        cleanMessage := StrReplace(StrReplace(String(message), "`r", " "), "`n", " | ")
+        FileAppend(FormatTime(, "yyyy-MM-dd HH:mm:ss") " [" level "] " cleanMessage "`r`n", logPath, "UTF-8")
+    }
+}
+
+LogError(context, error := "") {
+    if IsObject(error) {
+        details := context ": " error.Message
+        if error.File != ""
+            details .= " (" error.File ":" error.Line ")"
+        if error.Stack != ""
+            details .= " | " error.Stack
+        WriteLog("ERROR", details)
+    } else {
+        WriteLog("ERROR", context (error != "" ? ": " error : ""))
+    }
+}
+
+LogUnhandledError(error, mode) {
+    LogError("Unhandled " mode " error", error)
+    return false
+}
+
+GetModelDetails(modelPath) {
+    SplitPath(modelPath, &fileName)
+    switch fileName {
+        case "ggml-small.en.bin":
+            return {
+                Key: "small.en",
+                Url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin",
+                ExpectedBytes: 487614201
+            }
+        case "ggml-medium.en.bin":
+            return {
+                Key: "medium.en",
+                Url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin",
+                ExpectedBytes: 1533774781
+            }
+    }
+    return 0
+}
+
+GetModelPath(modelKey) {
+    switch modelKey {
+        case "small.en":
+            return A_ScriptDir "\models\ggml-small.en.bin"
+        case "medium.en":
+            return A_ScriptDir "\models\ggml-medium.en.bin"
+    }
+    return ""
+}
+
 ResetIcon() {
     if FileExist(idleIcon)
         TraySetIcon(idleIcon)
@@ -491,8 +670,8 @@ ShowTooltipTimed(text, duration) {
     SetTimer(() => ToolTip(), -duration)
 }
 
-ListDevices(*) {
-    ; Use mic-capture for WASAPI device listing
+GetAudioDevices() {
+    global MicCapturePath
     tempDevices := A_ScriptDir "\temp\devices.txt"
     if FileExist(tempDevices)
         FileDelete(tempDevices)
@@ -500,7 +679,7 @@ ListDevices(*) {
     cmd := 'cmd /c ""' MicCapturePath '" list > "' tempDevices '" 2>&1"'
     RunWait(cmd, A_ScriptDir, "Hide")
 
-    deviceList := ["Windows default (follows system changes)"]
+    deviceList := []
     if FileExist(tempDevices) {
         content := FileRead(tempDevices)
         for line in StrSplit(content, "`n") {
@@ -510,6 +689,31 @@ ListDevices(*) {
         }
         FileDelete(tempDevices)
     }
+
+    return deviceList
+}
+
+GetWindowsDefaultAudioDevice() {
+    global MicCapturePath
+    defaultDeviceFile := A_ScriptDir "\temp\default-device.txt"
+    if FileExist(defaultDeviceFile)
+        FileDelete(defaultDeviceFile)
+
+    command := 'cmd /c ""' MicCapturePath '" default > "' defaultDeviceFile '" 2>&1"'
+    try RunWait(command, A_ScriptDir, "Hide")
+    if FileExist(defaultDeviceFile) {
+        defaultDevice := Trim(FileRead(defaultDeviceFile))
+        FileDelete(defaultDeviceFile)
+        return defaultDevice
+    }
+    return ""
+}
+
+ListDevices(*) {
+    global FollowWindowsDefault, MicDevice, configPath
+    deviceList := ["Windows default (follows system changes)"]
+    for device in GetAudioDevices()
+        deviceList.Push(device)
 
     if deviceList.Length = 0 {
         MsgBox("No audio input devices found.", "Audio Devices", "Icon!")
@@ -551,22 +755,313 @@ ListDevices(*) {
 }
 
 OpenConfig(*) {
+    global configPath
     Run(configPath)
 }
 
+ShowSettings(*) {
+    global settingsGui, settingsController, settingsReady, settingsShowWhenReady
+    settingsShowWhenReady := true
+    if !settingsGui
+        InitializeSettings(true)
+    else if settingsReady {
+        settingsGui.Show()
+        settingsController.Fill()
+        settingsController.IsVisible := true
+    }
+}
+
+InitializeSettings(showWhenReady := false) {
+    global settingsGui, settingsHost, settingsController, settingsWebView
+    global settingsReady, settingsShowWhenReady
+    if showWhenReady
+        settingsShowWhenReady := true
+    if settingsGui
+        return
+
+    loaderPath := A_ScriptDir "\lib\WebView2Loader.dll"
+    settingsPage := A_ScriptDir "\ui\settings.html"
+    if !FileExist(loaderPath) or !FileExist(settingsPage) {
+        if settingsShowWhenReady {
+            MsgBox("The settings UI files are missing. Opening the raw configuration instead.", "Voice-to-Text", "Icon!")
+            OpenConfig()
+        }
+        return
+    }
+
+    settingsGui := Gui("+Resize MinSize720x560", "Voice-to-Text Settings")
+    settingsGui.MarginX := 0
+    settingsGui.MarginY := 0
+    settingsGui.OnEvent("Close", HideSettings)
+    settingsGui.OnEvent("Escape", HideSettings)
+    settingsGui.OnEvent("Size", ResizeSettings)
+    settingsGui.Show("Hide w840 h700")
+    SetSettingsWindowIcon(settingsGui.Hwnd)
+
+    try {
+        settingsController := WebView2.CreateControllerAsync(
+            settingsGui.Hwnd, 0, A_Temp "\VoiceToTextWebView2", "", loaderPath
+        ).await2(10000)
+        settingsController.Fill()
+        settingsWebView := settingsController.CoreWebView2
+        webViewSettings := settingsWebView.Settings
+        webViewSettings.AreDevToolsEnabled := false
+        webViewSettings.AreDefaultContextMenusEnabled := false
+        webViewSettings.IsStatusBarEnabled := false
+        webViewSettings.IsZoomControlEnabled := false
+        settingsHost := {
+            GetConfigValue: SettingsGetConfigValue,
+            GetAudioDevices: SettingsGetAudioDevices,
+            GetWindowsDefaultAudioDevice: GetWindowsDefaultAudioDevice,
+            GetCurrentModel: SettingsGetCurrentModel,
+            IsModelInstalled: SettingsIsModelInstalled,
+            LogError: SettingsLogError,
+            OpenRawConfig: OpenConfig,
+            OpenLog: SettingsOpenLog,
+            ExportLog: SettingsExportLog,
+            Ready: NotifySettingsReady,
+            SetWindowTitle: SettingsSetWindowTitle,
+            UpdateSetting: SettingsUpdateSetting
+        }
+        settingsWebView.AddHostObjectToScript("settings", settingsHost)
+        settingsWebView.SetVirtualHostNameToFolderMapping("voice-to-text.local", A_ScriptDir "\ui", 1)
+        settingsWebView.Navigate("https://voice-to-text.local/settings.html?v=20260714-2")
+    } catch as error {
+        LogError("Opening Settings", error)
+        showError := settingsShowWhenReady
+        DestroySettings()
+        if showError {
+            MsgBox("The settings window could not start. Opening the raw configuration instead.`n`n" error.Message, "Voice-to-Text", "Icon!")
+            OpenConfig()
+        }
+    }
+}
+
+SetSettingsWindowIcon(windowHandle) {
+    global settingsLargeIcon, settingsSmallIcon
+    iconPath := A_ScriptDir "\icons\app.ico"
+    if !FileExist(iconPath)
+        return
+    settingsLargeIcon := LoadPicture(iconPath, "Icon1 w32 h32", &imageType)
+    settingsSmallIcon := LoadPicture(iconPath, "Icon1 w16 h16", &imageType)
+    DllCall("SendMessage", "ptr", windowHandle, "uint", 0x80, "ptr", 1, "ptr", settingsLargeIcon)
+    DllCall("SendMessage", "ptr", windowHandle, "uint", 0x80, "ptr", 0, "ptr", settingsSmallIcon)
+}
+
+ResizeSettings(guiObject, minMax, width, height) {
+    global settingsController
+    if minMax != -1 and settingsController
+        settingsController.Fill()
+}
+
+HideSettings(*) {
+    global settingsGui, settingsController, settingsShowWhenReady
+    settingsShowWhenReady := false
+    if settingsGui {
+        if settingsController
+            settingsController.IsVisible := false
+        settingsGui.Hide()
+    }
+}
+
+NotifySettingsReady() {
+    global settingsGui, settingsController, settingsReady, settingsShowWhenReady
+    settingsReady := true
+    if settingsShowWhenReady and settingsGui {
+        settingsGui.Show()
+        settingsController.Fill()
+        settingsController.IsVisible := true
+    }
+}
+
+DestroySettings() {
+    global settingsGui, settingsHost, settingsController, settingsWebView
+    global settingsReady, settingsShowWhenReady, settingsLargeIcon, settingsSmallIcon
+    settingsWebView := 0
+    settingsController := 0
+    settingsHost := 0
+    if settingsGui {
+        guiToClose := settingsGui
+        settingsGui := 0
+        guiToClose.Destroy()
+    }
+    if settingsLargeIcon {
+        DllCall("DestroyIcon", "ptr", settingsLargeIcon)
+        settingsLargeIcon := 0
+    }
+    if settingsSmallIcon {
+        DllCall("DestroyIcon", "ptr", settingsSmallIcon)
+        settingsSmallIcon := 0
+    }
+    settingsReady := false
+    settingsShowWhenReady := false
+}
+
+SettingsGetConfigValue(section, key, defaultValue) {
+    global configPath
+    return IniRead(configPath, String(section), String(key), String(defaultValue))
+}
+
+SettingsGetAudioDevices() {
+    devices := ""
+    for device in GetAudioDevices()
+        devices .= (devices = "" ? "" : "`n") device
+    return devices
+}
+
+SettingsGetCurrentModel() {
+    global ModelPath
+    modelDetails := GetModelDetails(ModelPath)
+    return modelDetails ? modelDetails.Key : "small.en"
+}
+
+SettingsIsModelInstalled(modelKey) {
+    modelPath := GetModelPath(String(modelKey))
+    return modelPath != "" and FileExist(modelPath) ? "true" : "false"
+}
+
+SettingsSetWindowTitle(title) {
+    global settingsGui
+    if settingsGui
+        settingsGui.Title := String(title)
+}
+
+SettingsLogError(message) {
+    LogError("Settings UI", String(message))
+}
+
+SettingsOpenLog() {
+    global logPath
+    if !FileExist(logPath)
+        WriteLog("INFO", "Log opened")
+    Run(logPath)
+}
+
+SettingsExportLog() {
+    global logPath
+    if !FileExist(logPath)
+        WriteLog("INFO", "Log exported")
+    exportPath := FileSelect("S16", A_Desktop "\voice-to-text.log", "Export Voice-to-Text Log", "Log files (*.log)")
+    if exportPath = ""
+        return "cancelled"
+    if !RegExMatch(exportPath, "i)\.log$")
+        exportPath .= ".log"
+    FileCopy(logPath, exportPath, true)
+    return "exported"
+}
+
+SettingsUpdateSetting(setting, value) {
+    global configPath, FollowWindowsDefault, MicDevice, PushToTalkKey, WhisperThreads, ModelPath, RunAsAdministrator
+    setting := String(setting)
+    value := String(value)
+
+    switch setting {
+        case "followWindows":
+            FollowWindowsDefault := value = "true"
+            IniWrite(FollowWindowsDefault ? "true" : "false", configPath, "Audio", "FollowWindowsDefault")
+        case "microphone":
+            if value != "" {
+                MicDevice := value
+                IniWrite(MicDevice, configPath, "Audio", "MicDevice")
+            }
+        case "runAtLogin":
+            enabled := value = "true"
+            IniWrite(enabled ? "true" : "false", configPath, "Startup", "RunAtLogin")
+            UpdateStartupShortcut(enabled)
+        case "runAsAdmin":
+            enabled := value = "true"
+            if enabled != RunAsAdministrator {
+                SetTimer(RelaunchWithAdministratorMode.Bind(enabled, true), -100)
+                return "restarting"
+            }
+        case "hotkey":
+            if !IsSupportedHotkey(value)
+                throw ValueError("Unsupported hotkey")
+            if value != PushToTalkKey {
+                ApplyPushToTalkHotkey(value)
+                IniWrite(value, configPath, "Hotkey", "PushToTalk")
+                WriteLog("INFO", "Push-to-talk shortcut changed to " value)
+            }
+        case "threads":
+            try threadCount := Integer(value)
+            catch
+                throw ValueError("Threads must be a number")
+            threadCount := Max(1, Min(64, threadCount))
+            if threadCount != WhisperThreads {
+                IniWrite(threadCount, configPath, "Whisper", "Threads")
+                SetTimer(RestartWithSettings, -100)
+                return "restarting"
+            }
+        case "model":
+            modelPath := GetModelPath(value)
+            if modelPath = ""
+                throw ValueError("Unsupported speech model")
+            if modelPath != ModelPath {
+                IniWrite("models\ggml-" value ".bin", configPath, "Paths", "ModelPath")
+                SetTimer(RestartWithSettings, -100)
+                return "restarting"
+            }
+        default:
+            throw ValueError("Unsupported setting")
+    }
+
+    return "updated"
+}
+
+HasValue(values, expected) {
+    for value in values {
+        if value = expected
+            return true
+    }
+    return false
+}
+
+IsSupportedHotkey(value) {
+    if HasValue(["ShiftAlt", "CapsLock", "F13", "ScrollLock"], value)
+        return true
+    return RegExMatch(value, "^(?:[\^!+#]*)(?:[A-Z0-9]|F(?:[1-9]|1[0-9]|2[0-4])|Space|Enter|Tab|Backspace|Escape|Delete|Insert|Home|End|PgUp|PgDn|Up|Down|Left|Right)$")
+}
+
+UpdateStartupShortcut(enabled) {
+    shortcutPath := A_AppData "\Microsoft\Windows\Start Menu\Programs\Startup\voice-to-text - Shortcut.lnk"
+    if enabled {
+        shell := ComObject("WScript.Shell")
+        shortcut := shell.CreateShortcut(shortcutPath)
+        shortcut.TargetPath := A_ScriptFullPath
+        shortcut.WorkingDirectory := A_ScriptDir
+        shortcut.Description := "Voice-to-Text"
+        shortcut.Save()
+    } else if FileExist(shortcutPath) {
+        FileDelete(shortcutPath)
+    }
+}
+
+RestartWithSettings(*) {
+    Run('"' A_ScriptFullPath '" --settings', A_ScriptDir)
+    ExitApp()
+}
+
 ToggleAdministratorMode(*) {
+    global RunAsAdministrator
+    RelaunchWithAdministratorMode(!RunAsAdministrator)
+}
+
+RelaunchWithAdministratorMode(runAsAdmin, openSettings := false) {
     global RunAsAdministrator, configPath
-    RunAsAdministrator := !RunAsAdministrator
+    previousMode := RunAsAdministrator
+    RunAsAdministrator := runAsAdmin
     IniWrite(RunAsAdministrator ? "true" : "false", configPath, "Startup", "RunAsAdministrator")
+    launchArguments := openSettings ? " --settings" : ""
 
     if RunAsAdministrator {
         A_TrayMenu.Check("Run as Administrator")
         ToolTip("Restarting as administrator...")
         try {
-            Run('*RunAs "' A_ScriptFullPath '"')
-        } catch {
-            RunAsAdministrator := false
-            IniWrite("false", configPath, "Startup", "RunAsAdministrator")
+            Run('*RunAs "' A_ScriptFullPath '"' launchArguments)
+        } catch as error {
+            LogError("Relaunching as administrator", error)
+            RunAsAdministrator := previousMode
+            IniWrite(previousMode ? "true" : "false", configPath, "Startup", "RunAsAdministrator")
             A_TrayMenu.Uncheck("Run as Administrator")
             ShowTooltipTimed("Administrator mode unchanged", 2000)
             return
@@ -576,13 +1071,14 @@ ToggleAdministratorMode(*) {
         ToolTip("Restarting without administrator access...")
         restartScript := A_Temp "\VoiceToText_Restart_" A_TickCount ".cmd"
         try {
-            FileAppend('@ping 127.0.0.1 -n 2 > nul`r`n@start "" "' A_ScriptFullPath '"`r`n@del "%~f0"', restartScript)
+            FileAppend('@ping 127.0.0.1 -n 2 > nul`r`n@start "" "' A_ScriptFullPath '"' launchArguments '`r`n@del "%~f0"', restartScript)
             RunAsDesktopUser(restartScript, "", A_Temp, "open", 0)
-        } catch {
+        } catch as error {
+            LogError("Relaunching without administrator access", error)
             if FileExist(restartScript)
                 FileDelete(restartScript)
-            RunAsAdministrator := true
-            IniWrite("true", configPath, "Startup", "RunAsAdministrator")
+            RunAsAdministrator := previousMode
+            IniWrite(previousMode ? "true" : "false", configPath, "Startup", "RunAsAdministrator")
             A_TrayMenu.Check("Run as Administrator")
             ShowTooltipTimed("Administrator mode unchanged", 2000)
             return
@@ -600,6 +1096,8 @@ RunAsDesktopUser(filePath, arguments := "", directory := "", operation := "open"
 
 CleanUp(exitReason, exitCode) {
     global capturePID, serverPID, isCapsLockHotkey, originalCapsLockState, MicCapturePath
+
+    DestroySettings()
 
     ; Stop mic-capture gracefully
     Run('"' MicCapturePath '" stop', A_ScriptDir, "Hide")

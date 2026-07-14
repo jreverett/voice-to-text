@@ -62,7 +62,7 @@ jobs:
           # Find the 64-bit base file
           $base = Get-ChildItem "ahk" -Filter "AutoHotkey64.exe" -Recurse | Select-Object -First 1
           $baseArg = if ($base) { "/base `"$($base.FullName)`"" } else { "" }
-          $expr = "& `"$($ahk2exe.FullName)`" /in `"voice-to-text.ahk`" /out `"build\voice-to-text.exe`" /icon `"icons\idle.ico`" $baseArg /silent"
+          $expr = "& `"$($ahk2exe.FullName)`" /in `"voice-to-text.ahk`" /out `"build\voice-to-text.exe`" /icon `"icons\app.ico`" $baseArg /silent"
           Write-Host "Running: $expr"
           Invoke-Expression $expr
 
@@ -119,6 +119,7 @@ jobs:
             $bw.Write($pngBytes)
             $bw.Close(); $fs.Close()
           }
+          Copy-Item "icons\app.ico" "build\icons\app.ico"
 
       - name: Create default config
         shell: pwsh
@@ -150,6 +151,13 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path "build\models" -Force | Out-Null
           New-Item -ItemType Directory -Path "build\temp" -Force | Out-Null
+          New-Item -ItemType Directory -Path "build\lib" -Force | Out-Null
+          New-Item -ItemType Directory -Path "build\licenses" -Force | Out-Null
+          Copy-Item "lib\WebView2Loader.dll" "build\lib\WebView2Loader.dll"
+          Copy-Item "lib\ahk2_lib.LICENSE.txt" "build\licenses\ahk2_lib.LICENSE.txt"
+          Copy-Item "lib\WebView2.LICENSE.txt" "build\licenses\WebView2.LICENSE.txt"
+          Copy-Item "lib\WebView2.NOTICE.txt" "build\licenses\WebView2.NOTICE.txt"
+          Copy-Item "ui" "build\ui" -Recurse
 
       - name: Package release zip
         shell: pwsh

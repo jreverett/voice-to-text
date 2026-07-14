@@ -3,13 +3,14 @@ using NAudio.Wave;
 
 if (args.Length == 0)
 {
-    Console.Error.WriteLine("Usage: mic-capture <record|stop|list>");
+    Console.Error.WriteLine("Usage: mic-capture <record|stop|list|default>");
     return 1;
 }
 
 return args[0].ToLowerInvariant() switch
 {
     "list" => ListDevices(),
+    "default" => GetDefaultDevice(),
     "stop" => SignalStop(),
     "record" => Record(args[1..]),
     _ => Error($"Unknown command: {args[0]}")
@@ -27,6 +28,14 @@ static int ListDevices()
     foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active))
         Console.WriteLine(device.FriendlyName);
 
+    return 0;
+}
+
+static int GetDefaultDevice()
+{
+    using var enumerator = new MMDeviceEnumerator();
+    using var device = enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Console);
+    Console.WriteLine(device.FriendlyName);
     return 0;
 }
 

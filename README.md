@@ -32,7 +32,9 @@ Releasing during the orange startup phase cancels cleanly.
 
 ## Configuration
 
-Edit `config.ini` (next to `voice-to-text.exe`) to customize:
+Double-click the tray icon, or right-click it and choose **Settings**, to change the microphone, hotkey, startup behaviour, speech model, and thread count. Changes apply automatically; settings that affect the speech engine restart the app and reopen the same pane. Custom push-to-talk shortcuts can be captured directly from the keyboard. The settings window uses the WebView2 runtime included with current Windows 10 and Windows 11 installations.
+
+You can also edit `config.ini` (next to `voice-to-text.exe`) directly:
 
 | Section | Setting | Default | Notes |
 |---------|---------|---------|-------|
@@ -44,6 +46,8 @@ Edit `config.ini` (next to `voice-to-text.exe`) to customize:
 | `[Paths]` | `ModelPath` | `models\ggml-small.en.bin` | Swap for `medium.en` for better accuracy |
 | `[Startup]` | `RunAtLogin` | `true` | Creates/removes a startup shortcut |
 | `[Startup]` | `RunAsAdministrator` | `false` | Enables the hotkey in elevated windows; the tray toggle relaunches the app automatically |
+
+Application errors are written to `%LOCALAPPDATA%\VoiceToText\logs\voice-to-text.log`. Open or export the log from **Settings > Advanced > Diagnostics**. The log rotates at 1 MB and retains one previous file.
 
 ## Troubleshooting
 
@@ -79,7 +83,7 @@ cd voice-to-text
 # Build the WASAPI capture tool
 dotnet publish tools\mic-capture -c Release -o bin
 
-# Launch (auto-elevates)
+# Launch
 autohotkey voice-to-text.ahk
 ```
 
@@ -91,9 +95,11 @@ voice-to-text\
 ├── config.ini                # User configuration
 ├── setup.ps1                 # Downloads whisper.cpp, model, generates icons
 ├── tools\mic-capture\        # .NET WASAPI capture tool (source)
+├── ui\                        # HTML/CSS/JavaScript settings interface
+├── lib\                       # WebView2 bridge and loader
 ├── bin\                      # mic-capture.exe, whisper-server.exe, DLLs (gitignored)
 ├── models\                   # ggml-small.en.bin (gitignored)
-├── icons\                    # Tray icons: idle/starting/recording/transcribing
+├── icons\                    # Application icon and tray status lights
 └── temp\                     # Transient recordings (gitignored)
 ```
 

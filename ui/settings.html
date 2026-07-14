@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Voice-to-Text Settings</title>
+  <link rel="stylesheet" href="settings.css?v=20260714">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <img class="brand-mark" src="app-icon.png?v=20260714" alt="">
+        <div>
+          <strong>Voice-to-Text</strong>
+          <span>Settings</span>
+        </div>
+      </div>
+
+      <nav aria-label="Settings sections">
+        <button class="nav-item active" data-target="general">General</button>
+        <button class="nav-item" data-target="transcription">Transcription</button>
+        <button class="nav-item" data-target="advanced">Advanced</button>
+      </nav>
+
+      <div class="privacy-note">
+        <span class="privacy-dot"></span>
+        Audio stays on this device
+      </div>
+    </aside>
+
+    <main id="settings-form">
+      <section id="general" class="settings-page active">
+        <header>
+          <h1>General</h1>
+          <p>Choose how Voice-to-Text behaves.</p>
+        </header>
+
+        <h2 class="group-title">Audio</h2>
+        <div class="settings-group">
+          <label class="setting-row">
+            <span>
+              <strong>Follow the Windows input</strong>
+              <small>Use whichever microphone is selected in Windows.</small>
+            </span>
+            <span class="switch">
+              <input id="follow-windows" type="checkbox">
+              <span class="slider"></span>
+            </span>
+          </label>
+
+          <label class="setting-row" for="microphone">
+            <span>
+              <strong>Microphone</strong>
+              <small>Used when following Windows is turned off.</small>
+            </span>
+            <select id="microphone"></select>
+          </label>
+        </div>
+
+        <h2 class="group-title">Shortcut</h2>
+        <div class="settings-group">
+          <label class="setting-row" for="hotkey">
+            <span>
+              <strong>Push to talk</strong>
+              <small>Hold this shortcut while speaking.</small>
+            </span>
+            <select id="hotkey">
+              <option value="ShiftAlt">Shift + Alt</option>
+              <option value="CapsLock">Caps Lock</option>
+              <option value="F13">F13</option>
+              <option value="ScrollLock">Scroll Lock</option>
+              <option value="__current_custom__" hidden></option>
+              <option value="__custom__">Custom…</option>
+            </select>
+          </label>
+        </div>
+
+        <h2 class="group-title">Startup</h2>
+        <div class="settings-group">
+          <label class="setting-row">
+            <span>
+              <strong>Start with Windows</strong>
+              <small>Keep Voice-to-Text ready in the tray.</small>
+            </span>
+            <span class="switch">
+              <input id="run-at-login" type="checkbox">
+              <span class="slider"></span>
+            </span>
+          </label>
+
+          <label class="setting-row">
+            <span>
+              <strong>Run as administrator</strong>
+              <small>Enables shortcuts inside elevated applications.</small>
+            </span>
+            <span class="switch">
+              <input id="run-as-admin" type="checkbox">
+              <span class="slider"></span>
+            </span>
+          </label>
+        </div>
+      </section>
+
+      <section id="transcription" class="settings-page">
+        <header>
+          <h1>Transcription</h1>
+          <p>Control the local speech recognition model.</p>
+        </header>
+
+        <h2 class="group-title">Speech model</h2>
+        <div class="settings-group">
+          <label class="setting-row" for="model">
+            <span>
+              <strong>Model</strong>
+              <small>Changing model restarts the speech engine.</small>
+            </span>
+            <select id="model">
+              <option value="small.en">Small English</option>
+              <option value="medium.en">Medium English</option>
+            </select>
+          </label>
+
+          <div class="setting-row model-summary">
+            <span>
+              <strong id="model-name">Small English</strong>
+              <small id="model-description">Fast and accurate for everyday dictation.</small>
+            </span>
+            <span id="model-status" class="status-text">Checking…</span>
+          </div>
+        </div>
+        <p class="group-note">Models stay on this device and download only when selected.</p>
+      </section>
+
+      <section id="advanced" class="settings-page">
+        <header>
+          <h1>Advanced</h1>
+          <p>Most people can leave these settings unchanged.</p>
+        </header>
+
+        <h2 class="group-title">Performance</h2>
+        <div class="settings-group">
+          <label class="setting-row" for="threads">
+            <span>
+              <strong>CPU threads</strong>
+              <small>Changing this restarts the speech engine.</small>
+            </span>
+            <input id="threads" type="number" min="1" max="64" step="1">
+          </label>
+        </div>
+
+        <h2 class="group-title">Configuration</h2>
+        <div class="settings-group">
+          <div class="setting-row">
+            <span>
+              <strong>Raw configuration</strong>
+              <small>Open settings that aren’t shown here.</small>
+            </span>
+            <button id="open-config" class="button secondary" type="button">Open Config</button>
+          </div>
+        </div>
+
+        <h2 class="group-title">Diagnostics</h2>
+        <div class="settings-group">
+          <div class="setting-row">
+            <span>
+              <strong>Application log</strong>
+              <small>View recent errors or export a copy for troubleshooting.</small>
+            </span>
+            <span class="button-group">
+              <button id="open-log" class="button secondary" type="button">View Log</button>
+              <button id="export-log" class="button secondary" type="button">Export…</button>
+            </span>
+          </div>
+        </div>
+      </section>
+
+      <div id="save-status" role="status" aria-live="polite"></div>
+    </main>
+  </div>
+
+  <div id="shortcut-capture" class="sheet-backdrop" hidden>
+    <div class="capture-sheet" role="dialog" aria-modal="true" aria-labelledby="capture-title">
+      <h2 id="capture-title">Set Keyboard Shortcut</h2>
+      <p>Hold any modifiers, then press the key you want to use.</p>
+      <div id="shortcut-preview">Waiting for input…</div>
+      <button id="cancel-shortcut" class="button secondary" type="button">Cancel</button>
+    </div>
+  </div>
+
+  <script src="settings.js?v=20260714-2"></script>
+</body>
+</html>
