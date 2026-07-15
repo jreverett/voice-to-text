@@ -54,6 +54,8 @@ AutoHeadsetToggle := IniRead(configPath, "Hotkey", "AutoHeadsetToggle", "true") 
 HeadsetDeviceMatch := IniRead(configPath, "Hotkey", "HeadsetDeviceMatch", "EarPods")
 headsetActive := false
 headsetPollCount := 0
+headsetLastDevice := ""
+headsetStableCount := 0
 TranscriptionEngine := NormalizeTranscriptionEngine(IniRead(configPath, "Transcription", "Engine", "Whisper"))
 WhisperThreads := IniRead(configPath, "Whisper", "Threads", "16")
 ServerPort := IniRead(configPath, "Whisper", "ServerPort", "8178")
@@ -319,8 +321,10 @@ else
 RegisterPushToTalkHotkey()
 
 ; --- Auto-switch to the headphone toggle when EarPods become the default device ---
-OnMessage(0x0219, OnDeviceChange)  ; WM_DEVICECHANGE
+OnMessage(0x0219, OnDeviceChange)    ; WM_DEVICECHANGE
+OnMessage(0x0218, OnPowerBroadcast)  ; WM_POWERBROADCAST (catch sleep/resume)
 EvaluateHeadsetHotkey()
+SetTimer(EvaluateHeadsetHotkey, 10000)  ; periodic backstop; no-op (and no process spawn) when auto-switch is off
 
 RegisterPushToTalkHotkey() {
     global isShiftAltMode, isCustomHotkey, isToggleHotkey, PushToTalkKey
@@ -447,18 +451,37 @@ GetHotkeyBaseKey(hotkeyValue) {
 
 ; --- Auto headset-toggle switching ---
 OnDeviceChange(wParam, lParam, msg, hwnd) {
-    global headsetPollCount
-    ; Windows can take a moment to reassign the default device after the event, so poll briefly.
+    StartHeadsetPoll()
+}
+
+OnPowerBroadcast(wParam, lParam, msg, hwnd) {
+    ; PBT_APMRESUMESUSPEND (0x07) / PBT_APMRESUMEAUTOMATIC (0x12): re-check after waking.
+    if wParam = 0x07 or wParam = 0x12
+        StartHeadsetPoll()
+}
+
+StartHeadsetPoll() {
+    global headsetPollCount, headsetLastDevice, headsetStableCount
     headsetPollCount := 0
-    SetTimer(HeadsetPoll, 400)
+    headsetStableCount := 0
+    headsetLastDevice := "`n"  ; sentinel that won't match any real reading
+    SetTimer(HeadsetPoll, -150)  ; near-immediate first check; HeadsetPoll re-arms itself
 }
 
 HeadsetPoll(*) {
-    global headsetPollCount
+    global headsetPollCount, headsetLastDevice, headsetStableCount
     headsetPollCount += 1
-    EvaluateHeadsetHotkey()
-    if headsetPollCount >= 6
-        SetTimer(HeadsetPoll, 0)
+    device := EvaluateHeadsetHotkey()
+    ; Poll at a steady fast rate (Windows can take a couple of seconds to promote a newly-connected device
+    ; to default), and stop once the reading settles so we don't spawn the query process indefinitely.
+    if device = headsetLastDevice
+        headsetStableCount += 1
+    else
+        headsetStableCount := 0
+    headsetLastDevice := device
+    if headsetStableCount >= 3 or headsetPollCount >= 40
+        return  ; settled (or hard cap); the 10s backstop covers anything beyond
+    SetTimer(HeadsetPoll, -300)
 }
 
 GetDefaultCaptureDevice() {
@@ -481,11 +504,9 @@ EvaluateHeadsetHotkey(*) {
     global AutoHeadsetToggle, FollowWindowsDefault, HeadsetDeviceMatch
     global userHotkey, PushToTalkKey, headsetActive, isRecording, isTranscribing
 
-    ; Don't change the hotkey mid-recording; retry shortly.
-    if isRecording or isTranscribing {
-        SetTimer(EvaluateHeadsetHotkey, -1500)
-        return
-    }
+    ; Don't change the hotkey mid-recording; the periodic backstop and device-change poll will retry.
+    if isRecording or isTranscribing
+        return ""
 
     desired := userHotkey
     device := ""
@@ -508,6 +529,7 @@ EvaluateHeadsetHotkey(*) {
             LogError("Auto headset hotkey switch", switchError)
         }
     }
+    return device
 }
 
 NotifyHeadsetToggle() {
