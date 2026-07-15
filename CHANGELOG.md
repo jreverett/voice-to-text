@@ -4,7 +4,7 @@
 
 ### Bug Fixes
 
-* Fixed no microphones being detected — and the headphone auto-switch not firing — on a fresh install. The app now creates its `temp` working directory on startup; the release archive could omit it (empty folders are dropped when zipping), and the device queries that write there returned nothing without it.
+* Fixed a fresh install not detecting microphones, and the headphone auto-switch not working.
 
 ## 1.1.0 (2026-07-15)
 
