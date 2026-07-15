@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.1.0 (2026-07-15)
+
+### Features
+
+* **Groq is now the default transcription engine** — fast, low-latency cloud transcription. Requires a free Groq API key ([console.groq.com](https://console.groq.com), no credit card). Local Whisper remains available as a fully-offline option.
+* In-app API key entry — paste your Groq key in Settings; stored locally, no environment variable needed. It can be replaced or cleared in place.
+* First-run onboarding to set up Groq or switch to offline Local Whisper.
+* Headphone remote button as a push-to-talk option — click to start, click again to stop (holding grounds the mic, so it toggles). Automatically switches to it when a wired headset (e.g. Apple EarPods) becomes the default input and reverts on unplug, resiliently across sleep/resume.
+* Auto-paste — transcribed text is pasted into the focused input and left on the clipboard, with a trailing space so back-to-back dictations don't run together.
+* Optional spoken "send" trigger word (e.g. "go") that presses Enter after pasting.
+* Modern settings window with live updates — microphone, hotkey, and engine changes apply without restarting the app.
+* Startup and model-download progress window.
+* Follows the current Windows default microphone; administrator mode is now optional and disabled by default.
+
+### Notes
+
+* No local model is downloaded by default now that Groq is the default engine. For offline Local Whisper, run `setup.ps1 -IncludeLocalModel` or choose it during onboarding/Settings.
+
 ## 1.0.0 (2026-05-25)
 
 Initial public release.
