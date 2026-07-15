@@ -154,6 +154,10 @@ jobs:
           [Groq]
           Model=whisper-large-v3-turbo
           Language=en
+
+          [Send]
+          Enabled=false
+          Word=go
           "@ | Set-Content "build\config.ini" -NoNewline
 
       - name: Create directory structure

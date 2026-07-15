@@ -16,8 +16,17 @@ const groqKeyInput = document.querySelector("#groq-key");
 const groqKeySave = document.querySelector("#groq-key-save");
 const groqKeyClear = document.querySelector("#groq-key-clear");
 const groqKeyStatus = document.querySelector("#groq-key-status");
+const onboarding = document.querySelector("#onboarding");
+const onboardingKey = document.querySelector("#onboarding-key");
+const onboardingSave = document.querySelector("#onboarding-save");
+const onboardingLocal = document.querySelector("#onboarding-local");
+const onboardingOpenConsole = document.querySelector("#onboarding-open-console");
+const onboardingStatus = document.querySelector("#onboarding-status");
 const model = document.querySelector("#model");
 const threads = document.querySelector("#threads");
+const sendWordEnabled = document.querySelector("#send-word-enabled");
+const sendWord = document.querySelector("#send-word");
+const sendWordRow = document.querySelector("#send-word-row");
 const status = document.querySelector("#save-status");
 const shortcutCapture = document.querySelector("#shortcut-capture");
 const shortcutPreview = document.querySelector("#shortcut-preview");
@@ -277,6 +286,10 @@ function loadSettings() {
   configuredEngine = engine.value;
   threads.value = asString(bridge.GetConfigValue("Whisper", "Threads", "8"));
 
+  sendWordEnabled.checked = asBoolean(bridge.GetConfigValue("Send", "Enabled", "false"));
+  sendWord.value = asString(bridge.GetConfigValue("Send", "Word", "go"));
+  updateSendWordRow();
+
   configuredMicrophone = asString(bridge.GetConfigValue("Audio", "MicDevice", ""));
   const devices = asString(bridge.GetAudioDevices()).split("\n").filter(Boolean);
   microphone.replaceChildren(...devices.map(name => new Option(name, name, false, name === configuredMicrophone)));
@@ -439,6 +452,60 @@ groqKeySave.addEventListener("click", () => {
 groqKeyClear.addEventListener("click", () => {
   writeGroqKey("", "Groq API key removed");
 });
+function updateSendWordRow() {
+  const on = sendWordEnabled.checked;
+  sendWord.disabled = !on;
+  sendWordRow.classList.toggle("disabled", !on);
+}
+sendWordEnabled.addEventListener("change", () => {
+  updateSendWordRow();
+  updateSetting("sendWordEnabled", sendWordEnabled.checked ? "true" : "false");
+});
+sendWord.addEventListener("change", () => {
+  const value = sendWord.value.trim();
+  sendWord.value = value;
+  updateSetting("sendWord", value);
+});
+onboardingOpenConsole.addEventListener("click", () => {
+  try {
+    bridge.OpenGroqConsole();
+  } catch {}
+});
+onboardingSave.addEventListener("click", () => {
+  const key = onboardingKey.value.trim();
+  onboardingStatus.classList.remove("error");
+  if (!key) {
+    onboardingStatus.textContent = "Paste your API key first.";
+    onboardingStatus.classList.add("error");
+    return;
+  }
+  onboardingSave.disabled = true;
+  try {
+    asString(bridge.SetGroqApiKey(key));
+    bridge.MarkOnboarded();
+    onboarding.hidden = true;
+    updateEngineSummary();
+    showStatus("Groq API key saved");
+  } catch (error) {
+    try {
+      bridge.LogError(`Onboarding save: ${error?.message ?? error}`);
+    } catch {}
+    onboardingStatus.textContent = "Couldn’t save the key — try again.";
+    onboardingStatus.classList.add("error");
+  } finally {
+    onboardingSave.disabled = false;
+  }
+});
+onboardingLocal.addEventListener("click", () => {
+  onboardingLocal.disabled = true;
+  onboardingStatus.classList.remove("error");
+  onboardingStatus.textContent = "Switching to Local Whisper — the model will download on restart…";
+  try {
+    bridge.ChooseLocalEngine();
+  } catch {
+    onboardingLocal.disabled = false;
+  }
+});
 model.addEventListener("change", () => {
   const requestedModel = model.value;
   setSettingBusy("model", true, [model]);
@@ -528,6 +595,9 @@ function syncDynamicState() {
 window.addEventListener("DOMContentLoaded", () => {
   try {
     loadSettings();
+    if (!asBoolean(bridge.IsOnboarded()) && !asBoolean(bridge.HasGroqApiKey())) {
+      onboarding.hidden = false;
+    }
   } finally {
     bridge.Ready();
   }

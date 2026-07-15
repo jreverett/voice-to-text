@@ -1,6 +1,7 @@
 bin/
 obj/
 build/
+voice-to-text.exe
 models/
 temp/
 *.wav

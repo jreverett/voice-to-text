@@ -31,6 +31,8 @@ That's it. Skip to [Usage](#usage) or [Configuration](#configuration) if you wan
 
 The text is always left on the clipboard, so if no input is focused you can paste it yourself with Ctrl+V. A trailing space is appended so you can dictate several times in a row without the words running together. Releasing during the orange startup phase cancels cleanly.
 
+Optionally, enable a **send trigger word** (Settings → Transcription → Dictation, off by default): end your dictation with the word (default "go") and Voice-to-Text strips it and presses Enter, so you can dictate and submit hands-free.
+
 ## Configuration
 
 Double-click the tray icon, or right-click it and choose **Settings**, to change the microphone, hotkey, startup behaviour, transcription engine, speech model, and thread count. Changes apply automatically; switching between Local Whisper and Groq API happens without restarting the app. Custom push-to-talk shortcuts can be captured directly from the keyboard, and the **Headphone button** option maps recording to the centre button on a wired headset remote (e.g. Apple USB-C EarPods). It works as a **toggle** — click once to start, click again to stop — because these remotes short the mic to ground while the button is held, so hold-to-talk would record silence. While that option is selected the button no longer plays/pauses media.
@@ -49,6 +51,8 @@ You can also edit `config.ini` (next to `voice-to-text.exe`) directly:
 | `[Transcription]` | `Engine` | `Groq` | Use `Groq` for cloud transcription or `Whisper` for local/offline transcription |
 | `[Groq]` | `Model` | `whisper-large-v3-turbo` | Groq speech model; use `whisper-large-v3` for slightly higher accuracy |
 | `[Groq]` | `Language` | `en` | Language hint sent to the Groq speech-to-text endpoint |
+| `[Send]` | `Enabled` | `false` | Opt-in: when a dictation ends with the trigger word, press Enter after pasting |
+| `[Send]` | `Word` | `go` | Spoken trigger word that submits — it's stripped from the text along with any trailing comma |
 | `[Whisper]` | `Threads` | `8` | Number of CPU threads for whisper inference (local mode) |
 | `[Whisper]` | `ServerPort` | `8178` | Local port for whisper-server (local mode) |
 | `[Paths]` | `ModelPath` | `models\ggml-small.en.bin` | Local model; not downloaded by default (see Offline mode) |

@@ -7,6 +7,37 @@
   <link rel="stylesheet" href="settings.css?v=20260714-8">
 </head>
 <body>
+  <div id="onboarding" class="onboarding" hidden>
+    <div class="onboarding-card">
+      <img class="onboarding-mark" src="app-icon.png?v=20260714-8" alt="">
+      <h1>Welcome to Voice-to-Text</h1>
+      <p class="onboarding-lead">Hold your hotkey, speak, and the text is pasted where you're typing. Transcription uses <strong>Groq</strong> by default — fast, cloud-based, and free with your own API key.</p>
+
+      <div class="onboarding-section">
+        <h2>Set up Groq (recommended)</h2>
+        <ol class="onboarding-steps">
+          <li>Open the Groq console and sign in with Google or email — no credit card needed.</li>
+          <li>Create an API key and copy it.</li>
+          <li>Paste it below and click Save.</li>
+        </ol>
+        <button id="onboarding-open-console" type="button" class="button">Open console.groq.com</button>
+        <div class="onboarding-key-row">
+          <input id="onboarding-key" type="password" autocomplete="off" spellcheck="false" placeholder="gsk_…" />
+          <button id="onboarding-save" type="button" class="button button-primary">Save &amp; start</button>
+        </div>
+        <p id="onboarding-status" class="onboarding-status"></p>
+      </div>
+
+      <div class="onboarding-divider"><span>or</span></div>
+
+      <div class="onboarding-section">
+        <h2>Use Local Whisper (offline)</h2>
+        <p class="onboarding-note">No API key, nothing leaves your machine. Downloads a ~466&nbsp;MB model on the next launch, and transcription is slower and a little less accurate than Groq.</p>
+        <button id="onboarding-local" type="button" class="button">Use offline mode</button>
+      </div>
+    </div>
+  </div>
+
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand">
@@ -190,6 +221,30 @@
           </div>
         </div>
         <p class="group-note">Models stay on this device and download only when selected.</p>
+
+        <h2 class="group-title">Dictation</h2>
+        <div class="settings-group">
+          <label class="setting-row">
+            <span>
+              <strong>Send on trigger word</strong>
+              <small>End your speech with a word to press Enter automatically.</small>
+            </span>
+            <span class="control-cluster">
+              <span class="switch">
+                <input id="send-word-enabled" type="checkbox">
+                <span class="slider"></span>
+              </span>
+            </span>
+          </label>
+
+          <label id="send-word-row" class="setting-row" for="send-word">
+            <span>
+              <strong>Trigger word</strong>
+              <small>Spoken at the end, it's removed and Enter is pressed.</small>
+            </span>
+            <input id="send-word" type="text" autocomplete="off" spellcheck="false" placeholder="go">
+          </label>
+        </div>
       </section>
 
       <section id="advanced" class="settings-page">

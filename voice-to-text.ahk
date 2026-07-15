@@ -7,6 +7,8 @@ InstallKeybdHook()
 configPath := A_ScriptDir "\config.ini"
 logPath := EnvGet("LOCALAPPDATA") "\VoiceToText\logs\voice-to-text.log"
 groqKeyPath := EnvGet("LOCALAPPDATA") "\VoiceToText\groq_api_key.txt"
+onboardedPath := EnvGet("LOCALAPPDATA") "\VoiceToText\onboarded"
+headsetNotifiedPath := EnvGet("LOCALAPPDATA") "\VoiceToText\headset_notified"
 RunAsAdministrator := IniRead(configPath, "Startup", "RunAsAdministrator", "false") = "true"
 settingsLaunchArgument := A_Args.Length > 0 and A_Args[1] = "--settings" ? " --settings" : ""
 InitializeLogging()
@@ -57,6 +59,8 @@ WhisperThreads := IniRead(configPath, "Whisper", "Threads", "16")
 ServerPort := IniRead(configPath, "Whisper", "ServerPort", "8178")
 GroqModel := IniRead(configPath, "Groq", "Model", "whisper-large-v3-turbo")
 GroqLanguage := IniRead(configPath, "Groq", "Language", "en")
+SendWordEnabled := IniRead(configPath, "Send", "Enabled", "false") = "true"
+SendWord := IniRead(configPath, "Send", "Word", "go")
 lastTranscriptionError := ""
 
 ; --- Validate Binaries ---
@@ -498,10 +502,24 @@ EvaluateHeadsetHotkey(*) {
         try {
             ApplyPushToTalkHotkey(desired)
             WriteLog("INFO", "Auto-switched push-to-talk to " desired " (default device: " device ")")
+            if headsetActive
+                NotifyHeadsetToggle()
         } catch as switchError {
             LogError("Auto headset hotkey switch", switchError)
         }
     }
+}
+
+NotifyHeadsetToggle() {
+    global headsetNotifiedPath
+    if FileExist(headsetNotifiedPath)
+        return
+    SplitPath(headsetNotifiedPath, , &dir)
+    if !DirExist(dir)
+        DirCreate(dir)
+    FileAppend("", headsetNotifiedPath)
+    ; No icon-type flag, so Windows uses the app's own icon instead of the generic info icon.
+    TrayTip("Push-to-talk switched to your earphone button. Click it once to start recording, click again to stop.", "Headphones connected")
 }
 
 ; --- Stop mic-capture and reset to idle ---
@@ -604,6 +622,7 @@ OnKeyDown(*) {
 
 OnKeyUp(*) {
     global isRecording, isTranscribing, capturePID, lastTranscriptionError, isKeyHeld
+    global SendWordEnabled, SendWord
 
     isKeyHeld := false
     if !isRecording
@@ -645,12 +664,32 @@ OnKeyUp(*) {
         return
     }
 
+    ; Optional "send word": if the transcript ends with the trigger word, strip it and press Enter after pasting.
+    sendNow := false
+    trigger := Trim(SendWord)
+    if SendWordEnabled and trigger != "" {
+        escaped := RegExReplace(trigger, "([\\.\*\?\+\[\]\{\}\(\)\^\$\|\/])", "\$1")
+        trailingPattern := "i)(?:\s+|^)" escaped "[\s\.\,\!\?\;\:]*$"
+        if RegExMatch(output, trailingPattern) {
+            output := RegExReplace(output, trailingPattern, "")
+            ; The model often inserts a comma before the trigger word; drop trailing comma-family punctuation but keep sentence-ending . ! ?
+            output := RegExReplace(output, "[\s,;:]+$", "")
+            sendNow := true
+        }
+    }
+
     ; Copy to clipboard and paste into the focused input (trailing space so consecutive dictations don't run together)
-    A_Clipboard := output " "
-    ClipWait(1)
-    SendInput("^v")
-    preview := StrLen(output) > 50 ? SubStr(output, 1, 50) "..." : output
-    ShowTooltipTimed("Pasted: " preview, 3000)
+    pasteText := sendNow ? output : output " "
+    A_Clipboard := pasteText
+    if pasteText != "" {
+        ClipWait(1)
+        SendInput("^v")
+    }
+    if sendNow
+        SendInput("{Enter}")
+
+    preview := StrLen(output) > 50 ? SubStr(output, 1, 50) "..." : (output = "" ? "(enter)" : output)
+    ShowTooltipTimed((sendNow ? "Sent: " : "Pasted: ") preview, 3000)
 
     isTranscribing := false
     ResetIcon()
@@ -1103,6 +1142,10 @@ InitializeSettings(showWhenReady := false) {
             HasGroqApiKey: SettingsHasGroqApiKey,
             GetGroqApiKeyHint: SettingsGetGroqApiKeyHint,
             SetGroqApiKey: SettingsSetGroqApiKey,
+            IsOnboarded: SettingsIsOnboarded,
+            MarkOnboarded: SettingsMarkOnboarded,
+            OpenGroqConsole: SettingsOpenGroqConsole,
+            ChooseLocalEngine: SettingsChooseLocalEngine,
             LogError: SettingsLogError,
             OpenRawConfig: OpenConfig,
             OpenLog: SettingsOpenLog,
@@ -1113,7 +1156,7 @@ InitializeSettings(showWhenReady := false) {
         }
         settingsWebView.AddHostObjectToScript("settings", settingsHost)
         settingsWebView.SetVirtualHostNameToFolderMapping("voice-to-text.local", A_ScriptDir "\ui", 1)
-        settingsWebView.Navigate("https://voice-to-text.local/settings.html?v=20260715-2")
+        settingsWebView.Navigate("https://voice-to-text.local/settings.html?v=20260715-4")
     } catch as error {
         LogError("Opening Settings", error)
         showError := settingsShowWhenReady
@@ -1213,6 +1256,35 @@ SettingsGetActiveHotkey() {
     return PushToTalkKey
 }
 
+SettingsIsOnboarded() {
+    global onboardedPath
+    return FileExist(onboardedPath) ? "true" : "false"
+}
+
+SettingsMarkOnboarded() {
+    global onboardedPath
+    SplitPath(onboardedPath, , &dir)
+    if !DirExist(dir)
+        DirCreate(dir)
+    if !FileExist(onboardedPath)
+        FileAppend("", onboardedPath)
+    return "ok"
+}
+
+SettingsOpenGroqConsole() {
+    Run("https://console.groq.com/keys")
+    return "ok"
+}
+
+SettingsChooseLocalEngine() {
+    global configPath
+    IniWrite("Whisper", configPath, "Transcription", "Engine")
+    SettingsMarkOnboarded()
+    WriteLog("INFO", "Onboarding: chose local Whisper engine")
+    SetTimer(() => Reload(), -200)
+    return "restarting"
+}
+
 SettingsHasGroqApiKey() {
     return GetGroqApiKey() != "" ? "true" : "false"
 }
@@ -1276,7 +1348,7 @@ SettingsExportLog() {
 }
 
 SettingsUpdateSetting(setting, value) {
-    global configPath, FollowWindowsDefault, MicDevice, PushToTalkKey, userHotkey, TranscriptionEngine, WhisperThreads, ModelPath, RunAsAdministrator
+    global configPath, FollowWindowsDefault, MicDevice, PushToTalkKey, userHotkey, TranscriptionEngine, WhisperThreads, ModelPath, RunAsAdministrator, SendWordEnabled, SendWord
     setting := String(setting)
     value := String(value)
 
@@ -1334,6 +1406,12 @@ SettingsUpdateSetting(setting, value) {
                 SetTimer(RestartWithSettings, -100)
                 return "restarting"
             }
+        case "sendWordEnabled":
+            SendWordEnabled := value = "true"
+            IniWrite(SendWordEnabled ? "true" : "false", configPath, "Send", "Enabled")
+        case "sendWord":
+            SendWord := Trim(value)
+            IniWrite(SendWord, configPath, "Send", "Word")
         default:
             throw ValueError("Unsupported setting")
     }
