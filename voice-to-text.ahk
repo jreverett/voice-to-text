@@ -63,6 +63,8 @@ GroqModel := IniRead(configPath, "Groq", "Model", "whisper-large-v3-turbo")
 GroqLanguage := IniRead(configPath, "Groq", "Language", "en")
 SendWordEnabled := IniRead(configPath, "Send", "Enabled", "false") = "true"
 SendWord := IniRead(configPath, "Send", "Word", "go")
+TabNavEnabled := IniRead(configPath, "TabNavigation", "Enabled", "true") = "true"
+TabNavProcess := IniRead(configPath, "TabNavigation", "TargetProcess", "WindowsTerminal.exe")
 lastTranscriptionError := ""
 
 ; Ensure the temp directory exists — device queries redirect mic-capture output into it,
@@ -330,6 +332,56 @@ OnMessage(0x0219, OnDeviceChange)    ; WM_DEVICECHANGE
 OnMessage(0x0218, OnPowerBroadcast)  ; WM_POWERBROADCAST (catch sleep/resume)
 EvaluateHeadsetHotkey()
 SetTimer(EvaluateHeadsetHotkey, 10000)  ; periodic backstop; no-op (and no process spawn) when auto-switch is off
+
+; --- Headset volume buttons navigate tabs in the target app (suppressing the volume change) ---
+if TabNavEnabled
+    RegisterTabNavigation()
+
+RegisterTabNavigation() {
+    global tabNavGui, tabNavMsg, tabNavVolume
+    if IsSet(tabNavGui) && tabNavGui
+        return
+    tabNavGui := Gui()  ; hidden helper window; the shell delivers app-commands here
+    tabNavMsg := DllCall("RegisterWindowMessage", "Str", "SHELLHOOK", "UInt")
+    DllCall("RegisterShellHookWindow", "Ptr", tabNavGui.Hwnd)
+    OnMessage(tabNavMsg, OnShellHook)
+    tabNavVolume := SoundGetVolume()
+    SetTimer(TrackTabNavVolume, 400)
+}
+
+UnregisterTabNavigation() {
+    global tabNavGui, tabNavMsg
+    if !(IsSet(tabNavGui) && tabNavGui)
+        return
+    SetTimer(TrackTabNavVolume, 0)
+    DllCall("DeregisterShellHookWindow", "Ptr", tabNavGui.Hwnd)
+    OnMessage(tabNavMsg, OnShellHook, 0)
+    tabNavGui.Destroy()
+    tabNavGui := ""
+}
+
+; Remember the real volume while the target app isn't focused, so we can restore to it.
+TrackTabNavVolume() {
+    global TabNavProcess, tabNavVolume
+    if !WinActive("ahk_exe " TabNavProcess)
+        tabNavVolume := SoundGetVolume()
+}
+
+; Volume app-commands bubble up to the shell hook when the focused app ignores them.
+; Windows still applies the volume change (explorer handles its own copy), so we snap it back.
+OnShellHook(wParam, lParam, msg, hwnd) {
+    global TabNavProcess, tabNavVolume
+    if (wParam != 12)  ; HSHELL_APPCOMMAND
+        return
+    cmd := (lParam >> 16) & 0x0FFF
+    if (cmd != 10 && cmd != 9)  ; APPCOMMAND_VOLUME_UP / _DOWN
+        return
+    if !WinActive("ahk_exe " TabNavProcess)
+        return
+    Send(cmd = 10 ? "^{Tab}" : "^+{Tab}")  ; volume up -> next tab, down -> previous
+    SoundSetVolume(tabNavVolume)
+    return 1
+}
 
 RegisterPushToTalkHotkey() {
     global isShiftAltMode, isCustomHotkey, isToggleHotkey, PushToTalkKey
@@ -1375,7 +1427,7 @@ SettingsExportLog() {
 }
 
 SettingsUpdateSetting(setting, value) {
-    global configPath, FollowWindowsDefault, MicDevice, PushToTalkKey, userHotkey, TranscriptionEngine, WhisperThreads, ModelPath, RunAsAdministrator, SendWordEnabled, SendWord
+    global configPath, FollowWindowsDefault, MicDevice, PushToTalkKey, userHotkey, TranscriptionEngine, WhisperThreads, ModelPath, RunAsAdministrator, SendWordEnabled, SendWord, TabNavEnabled
     setting := String(setting)
     value := String(value)
 
@@ -1439,6 +1491,13 @@ SettingsUpdateSetting(setting, value) {
         case "sendWord":
             SendWord := Trim(value)
             IniWrite(SendWord, configPath, "Send", "Word")
+        case "tabNavEnabled":
+            TabNavEnabled := value = "true"
+            IniWrite(TabNavEnabled ? "true" : "false", configPath, "TabNavigation", "Enabled")
+            if TabNavEnabled
+                RegisterTabNavigation()
+            else
+                UnregisterTabNavigation()
         default:
             throw ValueError("Unsupported setting")
     }

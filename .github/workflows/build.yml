@@ -158,6 +158,10 @@ jobs:
           [Send]
           Enabled=false
           Word=go
+
+          [TabNavigation]
+          Enabled=true
+          TargetProcess=WindowsTerminal.exe
           "@ | Set-Content "build\config.ini" -NoNewline
 
       - name: Create directory structure

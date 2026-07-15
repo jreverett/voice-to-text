@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0 (2026-07-15)
+
+### Features
+
+* Headset volume buttons now switch Windows Terminal tabs. With a wired headset remote focused on Windows Terminal, volume up moves to the next tab and volume down to the previous, instead of changing the volume — your volume level is kept where it was. Turn it on or off in Settings (on by default); it only applies while Windows Terminal is focused, so the buttons work as normal volume everywhere else.
+
+### Notes
+
+* When switching tabs this way, Windows briefly shows its volume flyout even though the volume doesn't actually change — a Windows limitation that can't be prevented from within the app.
+
 ## 1.1.1 (2026-07-15)
 
 ### Bug Fixes

@@ -27,6 +27,7 @@ const threads = document.querySelector("#threads");
 const sendWordEnabled = document.querySelector("#send-word-enabled");
 const sendWord = document.querySelector("#send-word");
 const sendWordRow = document.querySelector("#send-word-row");
+const tabNavEnabled = document.querySelector("#tab-nav-enabled");
 const status = document.querySelector("#save-status");
 const shortcutCapture = document.querySelector("#shortcut-capture");
 const shortcutPreview = document.querySelector("#shortcut-preview");
@@ -289,6 +290,7 @@ function loadSettings() {
   sendWordEnabled.checked = asBoolean(bridge.GetConfigValue("Send", "Enabled", "false"));
   sendWord.value = asString(bridge.GetConfigValue("Send", "Word", "go"));
   updateSendWordRow();
+  tabNavEnabled.checked = asBoolean(bridge.GetConfigValue("TabNavigation", "Enabled", "true"));
 
   configuredMicrophone = asString(bridge.GetConfigValue("Audio", "MicDevice", ""));
   const devices = asString(bridge.GetAudioDevices()).split("\n").filter(Boolean);
@@ -465,6 +467,9 @@ sendWord.addEventListener("change", () => {
   const value = sendWord.value.trim();
   sendWord.value = value;
   updateSetting("sendWord", value);
+});
+tabNavEnabled.addEventListener("change", () => {
+  updateSetting("tabNavEnabled", tabNavEnabled.checked ? "true" : "false");
 });
 onboardingOpenConsole.addEventListener("click", () => {
   try {
