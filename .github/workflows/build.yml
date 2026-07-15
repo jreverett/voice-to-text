@@ -177,8 +177,22 @@ jobs:
         run: |
           Compress-Archive -Path "build\*" -DestinationPath "voice-to-text.zip"
 
+      - name: Extract release notes from CHANGELOG
+        shell: pwsh
+        run: |
+          $content = Get-Content CHANGELOG.md -Raw
+          # Split on version headings ("## ...") and take the first section.
+          $parts = $content -split "(?m)^## "
+          if ($parts.Count -gt 1) {
+            $notes = "## " + $parts[1].TrimEnd()
+          } else {
+            $notes = "Release $env:TAG"
+          }
+          Set-Content -Path release-notes.md -Value $notes -NoNewline
+
       - name: Upload zip to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
+          body_path: release-notes.md
           files: voice-to-text.zip
