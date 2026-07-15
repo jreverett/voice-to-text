@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0](https://github.com/jreverett/voice-to-text/compare/v1.1.1...v1.0.0) (2026-07-15)
+
+
+### Chores
+
+* bootstrap first release as v1.0.0 ([2776685](https://github.com/jreverett/voice-to-text/commit/2776685e2c052615a819cddf8c8e22dd5b2efc1a))
+
 ## 1.1.1 (2026-07-15)
 
 ### Bug Fixes
