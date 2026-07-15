@@ -1,11 +1,16 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Downloads ffmpeg, whisper.cpp, and the tiny.en model for voice-to-text.
+    Downloads ffmpeg, whisper.cpp, and (optionally) the local speech model for voice-to-text.
 .DESCRIPTION
     Idempotent — skips components that already exist.
     Run from the voice-to-text project root directory.
+    The default engine is Groq (cloud); pass -IncludeLocalModel to also download
+    the local Whisper model for offline transcription.
 #>
+param(
+    [switch]$IncludeLocalModel
+)
 
 $ErrorActionPreference = "Stop"
 $scriptDir = $PSScriptRoot
@@ -148,16 +153,18 @@ if (!(Test-Path $whisperServer)) {
     Write-Host "whisper-server.exe already present, skipping."
 }
 
-# --- 3. Model ---
+# --- 3. Model (local Whisper only) ---
 $modelFile = Join-Path $scriptDir "models\ggml-small.en.bin"
-if (!(Test-Path $modelFile)) {
+if (Test-Path $modelFile) {
+    Write-Host "ggml-small.en.bin already present, skipping."
+} elseif ($IncludeLocalModel) {
     Write-Host "`n--- Downloading ggml-small.en model (~466MB) ---"
     Download-File `
         -Url "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin" `
         -OutFile $modelFile
     Write-Host "Model saved to models\"
 } else {
-    Write-Host "ggml-small.en.bin already present, skipping."
+    Write-Host "Skipping local model download (default engine is Groq). Pass -IncludeLocalModel to download it."
 }
 
 # --- 4. Audio Configuration ---

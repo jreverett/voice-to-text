@@ -23,7 +23,7 @@ const shortcutCapture = document.querySelector("#shortcut-capture");
 const shortcutPreview = document.querySelector("#shortcut-preview");
 const currentCustomHotkeyOption = hotkey.querySelector('option[value="__current_custom__"]');
 
-const presetHotkeys = new Set(["ShiftAlt", "CapsLock", "F13", "ScrollLock"]);
+const presetHotkeys = new Set(["ShiftAlt", "CapsLock", "F13", "ScrollLock", "Media_Play_Pause"]);
 const settingSpinners = {
   followWindows: document.querySelector("#follow-windows-spinner"),
   microphone: document.querySelector("#microphone-spinner"),
@@ -187,6 +187,7 @@ function updateSetting(name, value) {
 
 function formatHotkey(value) {
   if (value === "ShiftAlt") return "Shift + Alt";
+  if (value === "Media_Play_Pause") return "Headphone button (toggle)";
   const modifiers = [];
   let key = value;
   const modifierNames = [["^", "Ctrl"], ["!", "Alt"], ["+", "Shift"], ["#", "Win"]];
@@ -252,7 +253,7 @@ function getCapturedHotkey(event) {
 function refreshWindowsDefaultMicrophone() {
   if (!followWindows.checked) return;
   const now = Date.now();
-  if (now - lastDefaultMicrophoneRefresh < 1500) return;
+  if (now - lastDefaultMicrophoneRefresh < 800) return;
   lastDefaultMicrophoneRefresh = now;
   const defaultDevice = asString(bridge.GetWindowsDefaultAudioDevice());
   if (!defaultDevice) return;
@@ -267,7 +268,7 @@ function loadSettings() {
   followWindows.checked = configuredFollowWindows;
   runAtLogin.checked = asBoolean(bridge.GetConfigValue("Startup", "RunAtLogin", "true"));
   runAsAdmin.checked = asBoolean(bridge.GetConfigValue("Startup", "RunAsAdministrator", "false"));
-  selectHotkey(asString(bridge.GetConfigValue("Hotkey", "PushToTalk", "ShiftAlt")));
+  selectHotkey(asString(bridge.GetActiveHotkey()));
   configuredEngine = asString(bridge.GetConfigValue("Transcription", "Engine", "Whisper"));
   if (/^(grok|xai|groq)$/i.test(configuredEngine)) {
     configuredEngine = "Groq";
@@ -508,10 +509,27 @@ window.addEventListener("unhandledrejection", event => {
     bridge.LogError(`Unhandled promise rejection: ${event.reason}`);
   } catch {}
 });
+// Keep the hotkey dropdown and mic display in sync when devices/hotkeys change under the app.
+function syncDynamicState() {
+  // Hotkey sync is a cheap global read — always safe to run.
+  if (shortcutCapture.hidden && document.activeElement !== hotkey) {
+    try {
+      const active = asString(bridge.GetActiveHotkey());
+      if (active) {
+        const current = hotkey.value === "__current_custom__" ? currentCustomHotkeyOption.dataset.hotkey : hotkey.value;
+        if (active !== current) selectHotkey(active);
+      }
+    } catch {}
+  }
+  // Mic refresh spawns a process, so only while the window is actually in view.
+  if (document.hasFocus()) refreshWindowsDefaultMicrophone();
+}
+
 window.addEventListener("DOMContentLoaded", () => {
   try {
     loadSettings();
   } finally {
     bridge.Ready();
   }
+  setInterval(syncDynamicState, 1000);
 });

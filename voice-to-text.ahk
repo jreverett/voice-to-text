@@ -21,6 +21,7 @@ if RunAsAdministrator and !A_IsAdmin {
 ; --- Global State ---
 isRecording := false
 isTranscribing := false
+isKeyHeld := false
 capturePID := 0
 serverPID := 0
 startupCancelled := false
@@ -46,6 +47,11 @@ WhisperServerPath := A_ScriptDir "\" IniRead(configPath, "Paths", "WhisperServer
 ModelPath := A_ScriptDir "\" IniRead(configPath, "Paths", "ModelPath", "models\ggml-small.en.bin")
 TempWav := A_ScriptDir "\" IniRead(configPath, "Paths", "TempWav", "temp\recording.wav")
 PushToTalkKey := IniRead(configPath, "Hotkey", "PushToTalk", "CapsLock")
+userHotkey := PushToTalkKey
+AutoHeadsetToggle := IniRead(configPath, "Hotkey", "AutoHeadsetToggle", "true") = "true"
+HeadsetDeviceMatch := IniRead(configPath, "Hotkey", "HeadsetDeviceMatch", "EarPods")
+headsetActive := false
+headsetPollCount := 0
 TranscriptionEngine := NormalizeTranscriptionEngine(IniRead(configPath, "Transcription", "Engine", "Whisper"))
 WhisperThreads := IniRead(configPath, "Whisper", "Threads", "16")
 ServerPort := IniRead(configPath, "Whisper", "ServerPort", "8178")
@@ -64,12 +70,6 @@ if IsWhisperEngine() and !FileExist(WhisperServerPath) {
 }
 
 ShowStartupWindow()
-
-if IsGroqEngine() and GetGroqApiKey() = "" {
-    CloseStartupWindow()
-    MsgBox("Groq API transcription requires an API key. Enter one in Settings or set the GROQ_API_KEY environment variable.", "Voice-to-Text", "Icon!")
-    ExitApp()
-}
 
 if IsWhisperEngine() and !FileExist(ModelPath) {
     SplitPath(ModelPath, , &modelDir)
@@ -192,7 +192,8 @@ if isCapsLockHotkey
 
 ; --- Shift+Alt combo state ---
 isShiftAltMode := (PushToTalkKey = "ShiftAlt")
-isCustomHotkey := !HasValue(["ShiftAlt", "CapsLock", "F13", "ScrollLock"], PushToTalkKey)
+isCustomHotkey := !HasValue(["ShiftAlt", "CapsLock", "F13", "ScrollLock", "Media_Play_Pause"], PushToTalkKey)
+isToggleHotkey := IsMediaHotkey(PushToTalkKey)
 shiftAltActive := false
 
 OnExit(CleanUp)
@@ -215,7 +216,8 @@ if IsWhisperEngine() {
         ExitApp()
     }
 } else {
-    SetStartupPhase("Checking Groq API settings", "Using Groq for transcription.", false, 100)
+    groqPhaseDetail := GetGroqApiKey() = "" ? "Add your Groq API key in Settings to start transcribing." : "Using Groq for transcription."
+    SetStartupPhase("Checking Groq API settings", groqPhaseDetail, false, 100)
     Sleep(300)
     if startupCancelled {
         CloseStartupWindow()
@@ -304,7 +306,7 @@ A_TrayMenu.Add("Exit", (*) => ExitApp())
 A_TrayMenu.Default := "Settings"
 A_TrayMenu.ClickCount := 2
 
-if A_Args.Length > 0 and A_Args[1] = "--settings"
+if (A_Args.Length > 0 and A_Args[1] = "--settings") or (IsGroqEngine() and GetGroqApiKey() = "")
     SetTimer(ShowSettings, -1)
 else
     SetTimer(InitializeSettings, -1)
@@ -312,13 +314,20 @@ else
 ; --- Register Hotkeys ---
 RegisterPushToTalkHotkey()
 
+; --- Auto-switch to the headphone toggle when EarPods become the default device ---
+OnMessage(0x0219, OnDeviceChange)  ; WM_DEVICECHANGE
+EvaluateHeadsetHotkey()
+
 RegisterPushToTalkHotkey() {
-    global isShiftAltMode, isCustomHotkey, PushToTalkKey
+    global isShiftAltMode, isCustomHotkey, isToggleHotkey, PushToTalkKey
     if isShiftAltMode {
         Hotkey("~*LAlt", ShiftAltDown)
         Hotkey("~*LAlt Up", ShiftAltUp)
         Hotkey("~*LAlt", "On")
         Hotkey("~*LAlt Up", "On")
+    } else if isToggleHotkey {
+        Hotkey(PushToTalkKey, OnToggleKey)
+        Hotkey(PushToTalkKey, "On")
     } else if isCustomHotkey {
         Hotkey(PushToTalkKey, OnKeyDown)
         Hotkey("~*" GetHotkeyBaseKey(PushToTalkKey) " Up", OnKeyUp)
@@ -333,10 +342,12 @@ RegisterPushToTalkHotkey() {
 }
 
 UnregisterPushToTalkHotkey() {
-    global isShiftAltMode, isCustomHotkey, PushToTalkKey
+    global isShiftAltMode, isCustomHotkey, isToggleHotkey, PushToTalkKey
     if isShiftAltMode {
         Hotkey("~*LAlt", "Off")
         Hotkey("~*LAlt Up", "Off")
+    } else if isToggleHotkey {
+        Hotkey(PushToTalkKey, "Off")
     } else if isCustomHotkey {
         Hotkey(PushToTalkKey, "Off")
         Hotkey("~*" GetHotkeyBaseKey(PushToTalkKey) " Up", "Off")
@@ -347,12 +358,13 @@ UnregisterPushToTalkHotkey() {
 }
 
 ApplyPushToTalkHotkey(newHotkey) {
-    global PushToTalkKey, isShiftAltMode, isCustomHotkey, isCapsLockHotkey
+    global PushToTalkKey, isShiftAltMode, isCustomHotkey, isToggleHotkey, isCapsLockHotkey
     global originalCapsLockState, shiftAltActive, isRecording
 
     oldHotkey := PushToTalkKey
     oldShiftAltMode := isShiftAltMode
     oldCustomHotkey := isCustomHotkey
+    oldToggleHotkey := isToggleHotkey
     oldCapsLockHotkey := isCapsLockHotkey
     oldCapsLockState := originalCapsLockState
 
@@ -365,7 +377,8 @@ ApplyPushToTalkHotkey(newHotkey) {
 
     PushToTalkKey := newHotkey
     isShiftAltMode := newHotkey = "ShiftAlt"
-    isCustomHotkey := !HasValue(["ShiftAlt", "CapsLock", "F13", "ScrollLock"], newHotkey)
+    isCustomHotkey := !HasValue(["ShiftAlt", "CapsLock", "F13", "ScrollLock", "Media_Play_Pause"], newHotkey)
+    isToggleHotkey := IsMediaHotkey(newHotkey)
     isCapsLockHotkey := newHotkey = "CapsLock"
     if isCapsLockHotkey {
         originalCapsLockState := GetKeyState("CapsLock", "T") ? "On" : "Off"
@@ -380,6 +393,7 @@ ApplyPushToTalkHotkey(newHotkey) {
         PushToTalkKey := oldHotkey
         isShiftAltMode := oldShiftAltMode
         isCustomHotkey := oldCustomHotkey
+        isToggleHotkey := oldToggleHotkey
         isCapsLockHotkey := oldCapsLockHotkey
         originalCapsLockState := oldCapsLockState
         if isCapsLockHotkey
@@ -410,14 +424,84 @@ ShiftAltUp(*) {
 
 ; --- Check if push-to-talk key is still held ---
 IsHotkeyHeld() {
-    global isShiftAltMode, PushToTalkKey
+    global isShiftAltMode, PushToTalkKey, isKeyHeld
     if isShiftAltMode
         return GetKeyState("LShift", "P") and GetKeyState("LAlt", "P")
+    ; Media/remote keys don't report a physical held state via GetKeyState, so rely on the down/up events.
+    if IsMediaHotkey(PushToTalkKey)
+        return isKeyHeld
     return GetKeyState(GetHotkeyBaseKey(PushToTalkKey), "P")
+}
+
+IsMediaHotkey(value) {
+    return RegExMatch(value, "i)^(Media_|Volume_|Launch_|Browser_)") > 0
 }
 
 GetHotkeyBaseKey(hotkeyValue) {
     return RegExReplace(hotkeyValue, "^[\^!+#]+")
+}
+
+; --- Auto headset-toggle switching ---
+OnDeviceChange(wParam, lParam, msg, hwnd) {
+    global headsetPollCount
+    ; Windows can take a moment to reassign the default device after the event, so poll briefly.
+    headsetPollCount := 0
+    SetTimer(HeadsetPoll, 400)
+}
+
+HeadsetPoll(*) {
+    global headsetPollCount
+    headsetPollCount += 1
+    EvaluateHeadsetHotkey()
+    if headsetPollCount >= 6
+        SetTimer(HeadsetPoll, 0)
+}
+
+GetDefaultCaptureDevice() {
+    global MicCapturePath
+    tempOut := A_ScriptDir "\temp\default_device.txt"
+    try {
+        if FileExist(tempOut)
+            FileDelete(tempOut)
+        RunWait('cmd /c ""' MicCapturePath '" default > "' tempOut '""', A_ScriptDir, "Hide")
+        if FileExist(tempOut) {
+            name := Trim(FileRead(tempOut), " `t`r`n")
+            FileDelete(tempOut)
+            return name
+        }
+    }
+    return ""
+}
+
+EvaluateHeadsetHotkey(*) {
+    global AutoHeadsetToggle, FollowWindowsDefault, HeadsetDeviceMatch
+    global userHotkey, PushToTalkKey, headsetActive, isRecording, isTranscribing
+
+    ; Don't change the hotkey mid-recording; retry shortly.
+    if isRecording or isTranscribing {
+        SetTimer(EvaluateHeadsetHotkey, -1500)
+        return
+    }
+
+    desired := userHotkey
+    device := ""
+    if AutoHeadsetToggle and FollowWindowsDefault and HeadsetDeviceMatch != "" {
+        device := GetDefaultCaptureDevice()
+        headsetActive := InStr(device, HeadsetDeviceMatch) > 0
+        if headsetActive
+            desired := "Media_Play_Pause"
+    } else {
+        headsetActive := false
+    }
+
+    if desired != PushToTalkKey {
+        try {
+            ApplyPushToTalkHotkey(desired)
+            WriteLog("INFO", "Auto-switched push-to-talk to " desired " (default device: " device ")")
+        } catch as switchError {
+            LogError("Auto headset hotkey switch", switchError)
+        }
+    }
 }
 
 ; --- Stop mic-capture and reset to idle ---
@@ -445,9 +529,21 @@ StopCapture() {
 }
 
 ; --- Hotkey Handlers ---
-OnKeyDown(*) {
-    global isRecording, isTranscribing, capturePID
+; Toggle keys (e.g. a headset button) can't hold-to-talk — holding the button grounds the mic — so click to start, click to stop.
+OnToggleKey(*) {
+    global isRecording, isTranscribing
+    if isTranscribing
+        return
+    if isRecording
+        OnKeyUp()
+    else
+        OnKeyDown()
+}
 
+OnKeyDown(*) {
+    global isRecording, isTranscribing, capturePID, isKeyHeld, isToggleHotkey
+
+    isKeyHeld := true
     if isRecording or isTranscribing
         return
 
@@ -480,8 +576,8 @@ OnKeyDown(*) {
     captureReady := false
     waitStart := A_TickCount
     while (A_TickCount - waitStart < 5000) {
-        ; Abort if user released the hotkey during startup
-        if !IsHotkeyHeld() {
+        ; Abort if user released the hotkey during startup (hold-to-talk only; toggle keys expect a release)
+        if !isToggleHotkey and !IsHotkeyHeld() {
             AbortRecording()
             return
         }
@@ -507,8 +603,9 @@ OnKeyDown(*) {
 }
 
 OnKeyUp(*) {
-    global isRecording, isTranscribing, capturePID, lastTranscriptionError
+    global isRecording, isTranscribing, capturePID, lastTranscriptionError, isKeyHeld
 
+    isKeyHeld := false
     if !isRecording
         return
 
@@ -548,10 +645,12 @@ OnKeyUp(*) {
         return
     }
 
-    ; Copy to clipboard
-    A_Clipboard := output
+    ; Copy to clipboard and paste into the focused input (trailing space so consecutive dictations don't run together)
+    A_Clipboard := output " "
+    ClipWait(1)
+    SendInput("^v")
     preview := StrLen(output) > 50 ? SubStr(output, 1, 50) "..." : output
-    ShowTooltipTimed("Copied: " preview, 3000)
+    ShowTooltipTimed("Pasted: " preview, 3000)
 
     isTranscribing := false
     ResetIcon()
@@ -1000,6 +1099,7 @@ InitializeSettings(showWhenReady := false) {
             GetWindowsDefaultAudioDevice: GetWindowsDefaultAudioDevice,
             GetCurrentModel: SettingsGetCurrentModel,
             IsModelInstalled: SettingsIsModelInstalled,
+            GetActiveHotkey: SettingsGetActiveHotkey,
             HasGroqApiKey: SettingsHasGroqApiKey,
             GetGroqApiKeyHint: SettingsGetGroqApiKeyHint,
             SetGroqApiKey: SettingsSetGroqApiKey,
@@ -1013,7 +1113,7 @@ InitializeSettings(showWhenReady := false) {
         }
         settingsWebView.AddHostObjectToScript("settings", settingsHost)
         settingsWebView.SetVirtualHostNameToFolderMapping("voice-to-text.local", A_ScriptDir "\ui", 1)
-        settingsWebView.Navigate("https://voice-to-text.local/settings.html?v=20260714-11")
+        settingsWebView.Navigate("https://voice-to-text.local/settings.html?v=20260715-2")
     } catch as error {
         LogError("Opening Settings", error)
         showError := settingsShowWhenReady
@@ -1108,6 +1208,11 @@ SettingsIsModelInstalled(modelKey) {
     return modelPath != "" and FileExist(modelPath) ? "true" : "false"
 }
 
+SettingsGetActiveHotkey() {
+    global PushToTalkKey
+    return PushToTalkKey
+}
+
 SettingsHasGroqApiKey() {
     return GetGroqApiKey() != "" ? "true" : "false"
 }
@@ -1171,7 +1276,7 @@ SettingsExportLog() {
 }
 
 SettingsUpdateSetting(setting, value) {
-    global configPath, FollowWindowsDefault, MicDevice, PushToTalkKey, TranscriptionEngine, WhisperThreads, ModelPath, RunAsAdministrator
+    global configPath, FollowWindowsDefault, MicDevice, PushToTalkKey, userHotkey, TranscriptionEngine, WhisperThreads, ModelPath, RunAsAdministrator
     setting := String(setting)
     value := String(value)
 
@@ -1179,6 +1284,7 @@ SettingsUpdateSetting(setting, value) {
         case "followWindows":
             FollowWindowsDefault := value = "true"
             IniWrite(FollowWindowsDefault ? "true" : "false", configPath, "Audio", "FollowWindowsDefault")
+            EvaluateHeadsetHotkey()
         case "microphone":
             if value != "" {
                 MicDevice := value
@@ -1197,9 +1303,10 @@ SettingsUpdateSetting(setting, value) {
         case "hotkey":
             if !IsSupportedHotkey(value)
                 throw ValueError("Unsupported hotkey")
-            if value != PushToTalkKey {
-                ApplyPushToTalkHotkey(value)
+            if value != userHotkey {
+                userHotkey := value
                 IniWrite(value, configPath, "Hotkey", "PushToTalk")
+                EvaluateHeadsetHotkey()
                 WriteLog("INFO", "Push-to-talk shortcut changed to " value)
             }
         case "engine":
@@ -1243,7 +1350,7 @@ HasValue(values, expected) {
 }
 
 IsSupportedHotkey(value) {
-    if HasValue(["ShiftAlt", "CapsLock", "F13", "ScrollLock"], value)
+    if HasValue(["ShiftAlt", "CapsLock", "F13", "ScrollLock", "Media_Play_Pause"], value)
         return true
     return RegExMatch(value, "^(?:[\^!+#]*)(?:[A-Z0-9]|F(?:[1-9]|1[0-9]|2[0-4])|Space|Enter|Tab|Backspace|Escape|Delete|Insert|Home|End|PgUp|PgDn|Up|Down|Left|Right)$")
 }

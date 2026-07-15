@@ -4,7 +4,7 @@
 
 ## Purpose
 
-Local push-to-talk speech-to-text for Windows. The primary use case is dictating prompts — hold Shift+Alt, speak, release, paste the transcribed text. Local Whisper remains the default; Groq API transcription is an optional cloud engine for lower latency.
+Push-to-talk speech-to-text for Windows. The primary use case is dictating prompts — hold Shift+Alt, speak, release, paste the transcribed text. Groq API transcription is the default (fast, low-latency, requires a free user-supplied API key); local Whisper is an optional fully-offline engine. No local model is downloaded by default.
 
 ## Architecture
 
@@ -16,21 +16,24 @@ An AutoHotkey v2 application (`voice-to-text.ahk`) orchestrates capture, transcr
 - **curl** (ships with Windows 10+) sends the WAV to either the local whisper-server or the Groq speech-to-text endpoint.
 - **WebView2** renders a lightweight HTML/CSS/JavaScript settings window. A small AHK host bridge reads and writes `config.ini`, manages the startup shortcut, and relaunches the app when settings change.
 
-Local flow: `Script start → whisper-server launch → Hotkey Down → mic-capture starts WASAPI recording → ready-file appears → icon turns red → Hotkey Up → mic-capture stop (named event) → curl POST to whisper-server → text to clipboard`
+Local flow: `Script start → whisper-server launch → Hotkey Down → mic-capture starts WASAPI recording → ready-file appears → icon turns red → Hotkey Up → mic-capture stop (named event) → curl POST to whisper-server → text to clipboard + auto-paste (Ctrl+V)`
 
-Groq flow: `Script start → API key check → Hotkey Down → mic-capture starts WASAPI recording → ready-file appears → icon turns red → Hotkey Up → mic-capture stop (named event) → curl POST to Groq STT → text to clipboard`
+Groq flow: `Script start → API key check → Hotkey Down → mic-capture starts WASAPI recording → ready-file appears → icon turns red → Hotkey Up → mic-capture stop (named event) → curl POST to Groq STT → text to clipboard + auto-paste (Ctrl+V)`
 
 ## Key Design Decisions
 
 - **mic-capture over ffmpeg for recording**: ffmpeg's DirectShow backend takes 2-3s to initialize the filter graph on every invocation. mic-capture uses WASAPI which starts capturing in ~50ms. The ready-file signal replaces stderr log parsing for accurate "recording started" detection.
 - **Named event stop signaling**: mic-capture listens on a Windows named event. AHK runs `mic-capture stop` which signals the event, causing the recorder to flush and finalize the WAV header cleanly. No taskkill or process kill needed for normal operation.
 - **Whisper server mode** instead of CLI-per-invocation: eliminates ~625ms model load on every transcription. The server starts on script launch and stays warm.
-- **Optional Groq API mode**: skips local model loading and uses Groq's batch speech-to-text endpoint (Whisper large-v3 on their LPUs) for faster transcription. The key is stored locally outside the repo (or read from `GROQ_API_KEY`), never in `config.ini`. Groq has a free tier requiring no credit card.
+- **Groq API as default**: uses Groq's batch speech-to-text endpoint (Whisper large-v3 on their LPUs) with no local model load. The key is user-supplied (not shipped), stored locally outside the repo (or read from `GROQ_API_KEY`), never in `config.ini`. Groq has a free tier requiring no credit card. If Groq mode starts without a key, the app opens Settings rather than exiting, so the user can paste one.
 - **OpenBLAS build**: setup.ps1 prefers the `whisper-blas-bin-x64.zip` release for accelerated CPU matrix operations over the plain build.
 - **16 threads**: the target hardware (Intel Core Ultra 7 165H) has 16 physical cores. Configured via config.ini.
 - **Optional administrator mode**: only needed for hotkeys in elevated windows. It is disabled by default and changing it relaunches at the selected privilege level.
 - **Shift+Alt hotkey** uses `~*LAlt` with LShift state check. The `~` prefix lets keys pass through normally when not in a recording combo. A dedicated `*LShift Up` hook was removed because it blocked normal Shift usage.
-- **Early release handling**: if the user releases the hotkey during mic startup, `IsHotkeyHeld()` detects it in the polling loop and `AbortRecording()` cleans up immediately. File deletion retries handle locked files from previous recordings.
+- **Early release handling**: if the user releases the hotkey during mic startup, `IsHotkeyHeld()` detects it in the polling loop and `AbortRecording()` cleans up immediately. File deletion retries handle locked files from previous recordings. `IsHotkeyHeld()` uses `GetKeyState` for keyboard keys, but media keys have no reliable physical state so it falls back to the event-tracked `isKeyHeld` flag.
+- **Toggle vs hold**: keyboard hotkeys are hold-to-talk. Headset-remote buttons (CTIA/AHJ) short the mic to ground while held — recording silence — so media-key hotkeys are click-to-toggle (`OnToggleKey`) and the startup-abort-on-release is skipped for them.
+- **Auto headset-toggle switching**: when `AutoHeadsetToggle` and `FollowWindowsDefault` are on, a `WM_DEVICECHANGE` handler (debounced) queries `mic-capture default`; if the default input name contains `HeadsetDeviceMatch` (default `EarPods`), the runtime hotkey switches to `Media_Play_Pause`, reverting to the user's base `userHotkey` on unplug. The switch is runtime-only (never written to config, so the base preference is preserved). `userHotkey` is the config `PushToTalk` value; auto-switching sets `PushToTalkKey` without touching `userHotkey`.
+- **Auto-paste on completion**: after transcription the text is copied to the clipboard and immediately pasted into the focused input via `SendInput("^v")` (guarded by `ClipWait`). The clipboard is left populated, so if no input is focused the user can paste manually.
 - **Four tray icon states**: green (idle), orange (starting/mic initializing), red (recording/audio flowing), yellow (transcribing). Icons are proper .ico files with embedded PNG, generated by setup.ps1.
 - **Separate application icon**: the executable and Settings UI use `icons/app.ico` and `ui/app-icon.png`; the tray remains a simple changing status light.
 - **curl for HTTP**: AHK's COM-based HTTP objects can't easily do multipart file uploads. curl ships with Windows 10+ and handles it cleanly.
@@ -45,7 +48,7 @@ Groq flow: `Script start → API key check → Hotkey Down → mic-capture start
 
 - **Windows only** — depends on WASAPI (mic-capture), AutoHotkey v2, and Windows startup shortcuts. Administrator mode is optional and disabled by default.
 - **CPU inference only** — the hardware has Intel Arc integrated graphics but no prebuilt Vulkan whisper.cpp binary exists. CUDA builds won't work (not NVIDIA). Encode time ~1.5-3s for short clips with `small.en` and 16 threads on OpenBLAS.
-- **Groq mode is cloud-based** — only use it when sending audio to Groq is acceptable. It is disabled by default and requires a Groq API key.
+- **Groq mode is cloud-based** — it is the default and requires a user-supplied Groq API key; audio is sent to Groq. Switch to local Whisper if that is not acceptable.
 - **No tests** — the script is pure I/O orchestration (real mic, real processes, real HTTP). Mocking everything would test nothing useful. Validate changes manually: hold hotkey, speak, check clipboard.
 
 ## Files
@@ -54,26 +57,27 @@ Groq flow: `Script start → API key check → Hotkey Down → mic-capture start
 |------|---------|
 | `voice-to-text.ahk` | Core script — hotkey handling, mic-capture lifecycle, whisper-server communication, clipboard, tray UI |
 | `config.ini` | User configuration — mic device, hotkey, model path, server port, threads, startup |
-| `setup.ps1` | Idempotent installer — downloads ffmpeg, whisper.cpp OpenBLAS build (cli + server), model, generates tray icons, creates startup shortcut |
+| `setup.ps1` | Idempotent installer — downloads ffmpeg, whisper.cpp OpenBLAS build (cli + server), generates tray icons, creates startup shortcut. `-IncludeLocalModel` also downloads the local model (skipped by default since Groq is the default engine) |
 | `tools/mic-capture/` | .NET console app — WASAPI audio capture with named event stop signaling. Build: `dotnet publish tools/mic-capture -c Release -o bin` |
 | `ui/` | HTML, CSS, and JavaScript for the settings window |
 | `lib/` | Vendored MIT-licensed AHK WebView2 bridge, support files, and Microsoft WebView2 loader |
 | `bin/` | mic-capture.exe, ffmpeg.exe, whisper-cli.exe, whisper-server.exe, DLLs (gitignored, populated by setup.ps1 + dotnet publish) |
-| `models/` | ggml-small.en.bin (gitignored, downloaded by setup.ps1) |
+| `models/` | ggml-small.en.bin (gitignored, offline mode only — via `setup.ps1 -IncludeLocalModel` or first Whisper-mode start) |
 | `icons/` | Tray icons generated by setup.ps1 — green (idle), orange (starting), red (recording), yellow (transcribing) |
 | `temp/` | Transient recording.wav, capture_ready, whisper_output.txt, groq_output.txt (gitignored) |
 
 ## Common Changes
 
 - **Change settings**: use the tray Settings window. Raw `config.ini` editing remains available under Advanced.
-- **Change hotkey**: select a preset or capture a custom modifier and key combination in Settings. `ShiftAlt` is a special-cased modifier-only combo.
+- **Change hotkey**: select a preset or capture a custom modifier and key combination in Settings. `ShiftAlt` is a special-cased modifier-only combo. `Media_Play_Pause` ("Headphone button") drives recording from a wired headset remote's centre button — registered suppressed (no `~`) so it doesn't control media. It is **toggle** (`isToggleHotkey`/`OnToggleKey`: click to start, click to stop), not hold-to-talk, because CTIA/AHJ remotes short the mic to ground while the button is held — holding records silence. Media/remote keys are detected by `IsMediaHotkey()`.
 - **Change mic**: follows the current Windows default by default; the tray menu can set an app-specific override.
 - **Administrator mode**: toggle "Run as Administrator" from the tray menu. The app relaunches at the selected privilege level.
 - **Improve accuracy**: swap `ModelPath` to a larger model (small.en → medium.en). Larger models are slower but more accurate. Do not downgrade below small.en.
-- **Use Groq transcription**: select Groq API in Settings and paste an API key into the API key field (or set `GROQ_API_KEY`). Settings can hot-switch between Local Whisper and Groq API.
+- **Use Groq transcription (default)**: select Groq API in Settings and paste an API key into the API key field (or set `GROQ_API_KEY`). Settings can hot-switch between Local Whisper and Groq API.
+- **Enable offline/local Whisper**: run `setup.ps1 -IncludeLocalModel` to fetch the model, then select Local Whisper in Settings (or start in `Engine=Whisper`, which downloads the model at startup).
 - **Add GPU support**: if a prebuilt Vulkan whisper.cpp binary becomes available, replace bin/ contents with it. No script changes needed. Intel Arc GPU could provide ~3-5x speedup.
 - **Rebuild mic-capture**: `dotnet publish tools/mic-capture -c Release -o bin` from project root.
-- **Create a release**: push a tag like `v1.0.0` — GitHub Actions builds everything, bundles into a zip, and creates a GitHub Release. The zip includes compiled AHK exe, self-contained mic-capture, whisper-server + DLLs, icons, and default config. Model downloads on first run.
+- **Create a release**: push a tag like `v1.0.0` — GitHub Actions builds everything, bundles into a zip, and creates a GitHub Release. The zip includes compiled AHK exe, self-contained mic-capture, whisper-server + DLLs, icons, and default config (`Engine=Groq`). No model is bundled; it downloads only if the user opts into local Whisper.
 
 ## Release Pipeline
 
@@ -82,12 +86,15 @@ Groq flow: `Script start → API key check → Hotkey Down → mic-capture start
 2. Compiles voice-to-text.ahk to exe via AHK2Exe and packages the WebView2 loader and settings assets
 3. Downloads whisper.cpp OpenBLAS binaries
 4. Generates tray icons
-5. Creates a default config.ini configured to follow the Windows input device
+5. Creates a default config.ini configured to follow the Windows input device, with `Engine=Groq`
 6. Packages everything into `voice-to-text-{tag}.zip` and attaches to a GitHub Release
 
 ## First-Run Experience
 
-On a fresh install from the release zip:
-1. A setup window downloads `ggml-small.en.bin` (~466MB) with progress and Cancel support
+On a fresh install from the release zip (default engine is Groq):
+1. No model download — the local model is fetched only when running in Whisper mode
 2. Uses the current Windows default input device
-3. Shows the speech-engine loading phase, then closes to the tray when ready
+3. If Groq mode has no API key, Settings opens automatically so the user can paste one; the app still starts to the tray (it no longer exits on a missing key)
+4. Once a key is saved, hold the hotkey to dictate
+
+Local/offline mode is opt-in: run `setup.ps1 -IncludeLocalModel` (or start in `Engine=Whisper`, which downloads `ggml-small.en.bin` ~466MB at startup with progress and Cancel support).

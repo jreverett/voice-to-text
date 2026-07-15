@@ -137,13 +137,15 @@ jobs:
 
           [Hotkey]
           PushToTalk=ShiftAlt
+          AutoHeadsetToggle=true
+          HeadsetDeviceMatch=EarPods
 
           [Startup]
           RunAtLogin=true
           RunAsAdministrator=false
 
           [Transcription]
-          Engine=Whisper
+          Engine=Groq
 
           [Whisper]
           Threads=8
