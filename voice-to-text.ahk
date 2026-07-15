@@ -65,6 +65,11 @@ SendWordEnabled := IniRead(configPath, "Send", "Enabled", "false") = "true"
 SendWord := IniRead(configPath, "Send", "Word", "go")
 lastTranscriptionError := ""
 
+; Ensure the temp directory exists — device queries redirect mic-capture output into it,
+; and a fresh release zip omits empty folders, so it may be missing on first run.
+if !DirExist(A_ScriptDir "\temp")
+    DirCreate(A_ScriptDir "\temp")
+
 ; --- Validate Binaries ---
 if !FileExist(MicCapturePath) {
     MsgBox("mic-capture.exe not found at:`n" MicCapturePath "`n`nBuild it with: dotnet publish tools\mic-capture -c Release -o bin", "Voice-to-Text", "Icon!")
