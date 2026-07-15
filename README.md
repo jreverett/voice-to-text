@@ -29,7 +29,7 @@ That's it. Skip to [Usage](#usage) or [Configuration](#configuration) if you wan
 2. **Speak** your text
 3. **Release** — icon turns yellow (transcribing), then the text is copied to the clipboard and pasted into the focused input, and the icon returns to green
 
-The text is always left on the clipboard, so if no input is focused you can paste it yourself with Ctrl+V. Releasing during the orange startup phase cancels cleanly.
+The text is always left on the clipboard, so if no input is focused you can paste it yourself with Ctrl+V. A trailing space is appended so you can dictate several times in a row without the words running together. Releasing during the orange startup phase cancels cleanly.
 
 ## Configuration
 
