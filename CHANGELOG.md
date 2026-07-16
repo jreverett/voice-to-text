@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.0 (2026-07-16)
+
+### Features
+
+* Trigger words now map to any keyboard shortcut, not just Enter. Define as many as you like in Settings — say a word at the end of your speech (e.g. "close") and it presses your chosen combo (Ctrl+W, Alt+F4, Win+L to lock, and so on). The original "go" still presses Enter.
+* Added voice commands. Turn them on in Settings and start speaking with a wake word ("computer" by default), then say a natural command — "computer, switch to Edge", "computer, open notepad", "computer, go to my GitHub tab in Edge", "computer, start drafting an email", "computer, lock the screen". It opens or switches to apps, moves between browser tabs, runs shortcuts, and can do a follow-up action like starting a new email. Normal dictation without the wake word is unchanged. Uses Groq, so it needs your Groq API key.
+
 ## 1.2.0 (2026-07-15)
 
 ### Features
