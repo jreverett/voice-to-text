@@ -1032,18 +1032,19 @@ AskGroqForCommand(commandText, windows, aliases) {
     if aliasList = ""
         aliasList := "(none configured)"
 
+    schema := 'Schema: {"action":"focus|launch|keys|none","window":<number or null>,"app":"<alias or executable.exe or null>","keys":"<AHK send string or null>"}'
     systemPrompt := "You route a spoken desktop command to ONE action. Reply with JSON only.`n"
-        . "Open windows (use the number to focus one):`n" windowList
-        . "Launch aliases (use the alias name):`n" aliasList
-        . "Schema: {""action"":""focus|launch|keys|none"",""window"":<number or null>,""app"":""<alias or executable.exe or null>"",""keys"":""<AHK send string or null>""}`n"
+        . "Open windows (use the number to focus one):`n" . windowList
+        . "Launch aliases (use the alias name):`n" . aliasList
+        . schema . "`n"
         . "Rules: switch to / go back to an open window => focus with its number. "
         . "open / launch an app => launch with a matching alias, else a bare executable like msedge.exe. "
         . "keyboard shortcut => keys (e.g. !{F4} for Alt+F4, #{l} to lock the screen). "
         . "If nothing fits => none."
 
-    body := '{"model":"' CommandModel '","temperature":0,"response_format":{"type":"json_object"},"messages":['
-        . '{"role":"system","content":"' JsonEscape(systemPrompt) '"},'
-        . '{"role":"user","content":"' JsonEscape(commandText) '"}]}'
+    body := '{"model":"' . CommandModel . '","temperature":0,"response_format":{"type":"json_object"},"messages":['
+        . '{"role":"system","content":"' . JsonEscape(systemPrompt) . '"},'
+        . '{"role":"user","content":"' . JsonEscape(commandText) . '"}]}'
 
     bodyPath := A_ScriptDir "\temp\command_request.json"
     outPath := A_ScriptDir "\temp\command_output.txt"
@@ -1054,11 +1055,11 @@ AskGroqForCommand(commandText, windows, aliases) {
         FileDelete(outPath)
 
     curlCmd := 'cmd /c "curl -sS -X POST https://api.groq.com/openai/v1/chat/completions'
-        . ' -H "Authorization: Bearer ' GetGroqApiKey() '"'
+        . ' -H "Authorization: Bearer ' . GetGroqApiKey() . '"'
         . ' -H "Content-Type: application/json"'
-        . ' --data-binary "@' bodyPath '"'
+        . ' --data-binary "@' . bodyPath . '"'
         . ' -w "\n__HTTP__%{http_code}"'
-        . ' > "' outPath '" 2>&1"'
+        . ' > "' . outPath . '" 2>&1"'
     exitCode := RunWait(curlCmd, A_ScriptDir, "Hide")
 
     raw := ""
