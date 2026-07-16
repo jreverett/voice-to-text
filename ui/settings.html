@@ -227,7 +227,7 @@
           <label class="setting-row">
             <span>
               <strong>Send on trigger word</strong>
-              <small>End your speech with a word to press Enter automatically.</small>
+              <small>End your speech with a trigger word to run its keys automatically.</small>
             </span>
             <span class="control-cluster">
               <span class="switch">
@@ -237,13 +237,16 @@
             </span>
           </label>
 
-          <label id="send-word-row" class="setting-row" for="send-word">
+          <div id="send-word-row" class="setting-row setting-row-stacked">
             <span>
-              <strong>Trigger word</strong>
-              <small>Spoken at the end, it's removed and Enter is pressed.</small>
+              <strong>Trigger words</strong>
+              <small>Say one at the end of your speech — it's removed and its keys are pressed.</small>
             </span>
-            <input id="send-word" type="text" autocomplete="off" spellcheck="false" placeholder="go">
-          </label>
+            <div class="send-rules">
+              <div id="send-rules-list"></div>
+              <button type="button" id="add-send-rule" class="link-button">+ Add trigger word</button>
+            </div>
+          </div>
 
           <label class="setting-row">
             <span>

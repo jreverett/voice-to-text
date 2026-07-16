@@ -25,7 +25,8 @@ const onboardingStatus = document.querySelector("#onboarding-status");
 const model = document.querySelector("#model");
 const threads = document.querySelector("#threads");
 const sendWordEnabled = document.querySelector("#send-word-enabled");
-const sendWord = document.querySelector("#send-word");
+const sendRulesList = document.querySelector("#send-rules-list");
+const addSendRule = document.querySelector("#add-send-rule");
 const sendWordRow = document.querySelector("#send-word-row");
 const tabNavEnabled = document.querySelector("#tab-nav-enabled");
 const status = document.querySelector("#save-status");
@@ -288,7 +289,7 @@ function loadSettings() {
   threads.value = asString(bridge.GetConfigValue("Whisper", "Threads", "8"));
 
   sendWordEnabled.checked = asBoolean(bridge.GetConfigValue("Send", "Enabled", "false"));
-  sendWord.value = asString(bridge.GetConfigValue("Send", "Word", "go"));
+  loadSendRules();
   updateSendWordRow();
   tabNavEnabled.checked = asBoolean(bridge.GetConfigValue("TabNavigation", "Enabled", "true"));
 
@@ -454,19 +455,126 @@ groqKeySave.addEventListener("click", () => {
 groqKeyClear.addEventListener("click", () => {
   writeGroqKey("", "Groq API key removed");
 });
+const MODIFIERS = [
+  { symbol: "^", label: "Ctrl" },
+  { symbol: "!", label: "Alt" },
+  { symbol: "+", label: "Shift" },
+  { symbol: "#", label: "Win" },
+];
+const KEY_OPTIONS = [
+  ...["Enter", "Tab", "Space", "Escape", "Backspace", "Delete", "Insert",
+    "Home", "End", "PgUp", "PgDn", "Up", "Down", "Left", "Right"].map(k => ({ value: k, label: k })),
+  ...Array.from({ length: 24 }, (_, i) => ({ value: `F${i + 1}`, label: `F${i + 1}` })),
+  ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map(c => ({ value: c.toLowerCase(), label: c })),
+  ..."0123456789".split("").map(c => ({ value: c, label: c })),
+];
+
 function updateSendWordRow() {
   const on = sendWordEnabled.checked;
-  sendWord.disabled = !on;
   sendWordRow.classList.toggle("disabled", !on);
+  sendRulesList.querySelectorAll("input, select, button").forEach(el => { el.disabled = !on; });
+  addSendRule.disabled = !on;
 }
+
+// Parse an AHK send string like "!{F4}" into { mods: Set("!"), key: "F4" }.
+function parseKeys(keys) {
+  const mods = new Set();
+  let rest = keys || "";
+  while (rest && "^!+#".includes(rest[0])) {
+    mods.add(rest[0]);
+    rest = rest.slice(1);
+  }
+  const match = rest.match(/^\{(.+)\}$/);
+  return { mods, key: match ? match[1] : "" };
+}
+
+function buildKeys(mods, key) {
+  if (!key) return "";
+  const order = MODIFIERS.map(m => m.symbol).filter(s => mods.has(s));
+  return order.join("") + `{${key}}`;
+}
+
+function createRuleRow(word, keys) {
+  const parsed = parseKeys(keys);
+  const row = document.createElement("div");
+  row.className = "send-rule";
+
+  const wordInput = document.createElement("input");
+  wordInput.type = "text";
+  wordInput.className = "rule-word";
+  wordInput.autocomplete = "off";
+  wordInput.spellcheck = false;
+  wordInput.placeholder = "trigger word";
+  wordInput.value = word || "";
+  wordInput.addEventListener("change", commitSendRules);
+
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "rule-remove";
+  remove.title = "Remove";
+  remove.textContent = "×";
+  remove.addEventListener("click", () => {
+    row.remove();
+    commitSendRules();
+  });
+
+  const keysWrap = document.createElement("div");
+  keysWrap.className = "rule-keys";
+  for (const mod of MODIFIERS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "rule-mod";
+    btn.dataset.mod = mod.symbol;
+    btn.textContent = mod.label;
+    btn.setAttribute("aria-pressed", parsed.mods.has(mod.symbol) ? "true" : "false");
+    btn.addEventListener("click", () => {
+      const pressed = btn.getAttribute("aria-pressed") === "true";
+      btn.setAttribute("aria-pressed", pressed ? "false" : "true");
+      commitSendRules();
+    });
+    keysWrap.append(btn);
+  }
+  const keySelect = document.createElement("select");
+  keySelect.className = "rule-key";
+  keySelect.append(...KEY_OPTIONS.map(o => new Option(o.label, o.value, false, o.value === parsed.key)));
+  keySelect.addEventListener("change", commitSendRules);
+  keysWrap.append(keySelect);
+
+  row.append(wordInput, remove, keysWrap);
+  return row;
+}
+
+function readSendRules() {
+  return [...sendRulesList.querySelectorAll(".send-rule")].map(row => {
+    const word = row.querySelector(".rule-word").value.trim();
+    const mods = new Set([...row.querySelectorAll('.rule-mod[aria-pressed="true"]')].map(b => b.dataset.mod));
+    const key = row.querySelector(".rule-key").value;
+    return { word, keys: buildKeys(mods, key) };
+  });
+}
+
+function commitSendRules() {
+  const rules = readSendRules().filter(r => r.word && r.keys);
+  const serialized = rules.map(r => `${r.word}\t${r.keys}`).join("\n");
+  updateSetting("sendRules", serialized);
+}
+
+function loadSendRules() {
+  const serialized = asString(bridge.GetSendRules());
+  sendRulesList.replaceChildren();
+  for (const line of serialized.split("\n").filter(Boolean)) {
+    const [word, keys] = line.split("\t");
+    sendRulesList.append(createRuleRow(word, keys));
+  }
+}
+
 sendWordEnabled.addEventListener("change", () => {
   updateSendWordRow();
   updateSetting("sendWordEnabled", sendWordEnabled.checked ? "true" : "false");
 });
-sendWord.addEventListener("change", () => {
-  const value = sendWord.value.trim();
-  sendWord.value = value;
-  updateSetting("sendWord", value);
+addSendRule.addEventListener("click", () => {
+  sendRulesList.append(createRuleRow("", "{Enter}"));
+  updateSendWordRow();
 });
 tabNavEnabled.addEventListener("change", () => {
   updateSetting("tabNavEnabled", tabNavEnabled.checked ? "true" : "false");

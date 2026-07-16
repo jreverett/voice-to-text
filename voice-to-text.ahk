@@ -62,7 +62,7 @@ ServerPort := IniRead(configPath, "Whisper", "ServerPort", "8178")
 GroqModel := IniRead(configPath, "Groq", "Model", "whisper-large-v3-turbo")
 GroqLanguage := IniRead(configPath, "Groq", "Language", "en")
 SendWordEnabled := IniRead(configPath, "Send", "Enabled", "false") = "true"
-SendWord := IniRead(configPath, "Send", "Word", "go")
+SendRules := LoadSendRules()
 TabNavEnabled := IniRead(configPath, "TabNavigation", "Enabled", "true") = "true"
 TabNavProcess := IniRead(configPath, "TabNavigation", "TargetProcess", "WindowsTerminal.exe")
 lastTranscriptionError := ""
@@ -701,7 +701,7 @@ OnKeyDown(*) {
 
 OnKeyUp(*) {
     global isRecording, isTranscribing, capturePID, lastTranscriptionError, isKeyHeld
-    global SendWordEnabled, SendWord
+    global SendWordEnabled, SendRules
 
     isKeyHeld := false
     if !isRecording
@@ -743,21 +743,27 @@ OnKeyUp(*) {
         return
     }
 
-    ; Optional "send word": if the transcript ends with the trigger word, strip it and press Enter after pasting.
-    sendNow := false
-    trigger := Trim(SendWord)
-    if SendWordEnabled and trigger != "" {
-        escaped := RegExReplace(trigger, "([\\.\*\?\+\[\]\{\}\(\)\^\$\|\/])", "\$1")
-        trailingPattern := "i)(?:\s+|^)" escaped "[\s\.\,\!\?\;\:]*$"
-        if RegExMatch(output, trailingPattern) {
-            output := RegExReplace(output, trailingPattern, "")
-            ; The model often inserts a comma before the trigger word; drop trailing comma-family punctuation but keep sentence-ending . ! ?
-            output := RegExReplace(output, "[\s,;:]+$", "")
-            sendNow := true
+    ; Optional send rules: if the transcript ends with a trigger word, strip it and press its mapped keys after pasting.
+    sendKeys := ""
+    if SendWordEnabled {
+        for rule in SendRules {
+            trigger := Trim(rule.word)
+            if trigger = ""
+                continue
+            escaped := RegExReplace(trigger, "([\\.\*\?\+\[\]\{\}\(\)\^\$\|\/])", "\$1")
+            trailingPattern := "i)(?:\s+|^)" escaped "[\s\.\,\!\?\;\:]*$"
+            if RegExMatch(output, trailingPattern) {
+                output := RegExReplace(output, trailingPattern, "")
+                ; The model often inserts a comma before the trigger word; drop trailing comma-family punctuation but keep sentence-ending . ! ?
+                output := RegExReplace(output, "[\s,;:]+$", "")
+                sendKeys := rule.keys
+                break
+            }
         }
     }
 
     ; Copy to clipboard and paste into the focused input (trailing space so consecutive dictations don't run together)
+    sendNow := sendKeys != ""
     pasteText := sendNow ? output : output " "
     A_Clipboard := pasteText
     if pasteText != "" {
@@ -765,7 +771,7 @@ OnKeyUp(*) {
         SendInput("^v")
     }
     if sendNow
-        SendInput("{Enter}")
+        SendInput(sendKeys)
 
     preview := StrLen(output) > 50 ? SubStr(output, 1, 50) "..." : (output = "" ? "(enter)" : output)
     ShowTooltipTimed((sendNow ? "Sent: " : "Pasted: ") preview, 3000)
@@ -1213,6 +1219,7 @@ InitializeSettings(showWhenReady := false) {
         webViewSettings.IsZoomControlEnabled := false
         settingsHost := {
             GetConfigValue: SettingsGetConfigValue,
+            GetSendRules: SettingsGetSendRules,
             GetAudioDevices: SettingsGetAudioDevices,
             GetWindowsDefaultAudioDevice: GetWindowsDefaultAudioDevice,
             GetCurrentModel: SettingsGetCurrentModel,
@@ -1310,6 +1317,99 @@ DestroySettings() {
 SettingsGetConfigValue(section, key, defaultValue) {
     global configPath
     return IniRead(configPath, String(section), String(key), String(defaultValue))
+}
+
+LoadSendRules() {
+    global configPath
+    rules := []
+    count := 0
+    try count := Integer(IniRead(configPath, "Send", "RuleCount", "0"))
+    if count = 0 {
+        ; Migrate the legacy single-word setting (Word=go -> Enter).
+        legacy := Trim(IniRead(configPath, "Send", "Word", ""))
+        if legacy != ""
+            rules.Push({ word: legacy, keys: "{Enter}" })
+    } else {
+        loop count {
+            word := Trim(IniRead(configPath, "Send", "Rule" A_Index "Word", ""))
+            keys := Trim(IniRead(configPath, "Send", "Rule" A_Index "Keys", ""))
+            if word != "" and keys != ""
+                rules.Push({ word: word, keys: keys })
+        }
+    }
+    SortSendRulesByLength(rules)
+    return rules
+}
+
+; Longest trigger first so a longer phrase wins over a shorter one it contains.
+SortSendRulesByLength(rules) {
+    n := rules.Length
+    if n < 2
+        return
+    loop n - 1 {
+        i := A_Index
+        loop n - i {
+            j := A_Index
+            if StrLen(rules[j].word) < StrLen(rules[j + 1].word) {
+                tmp := rules[j]
+                rules[j] := rules[j + 1]
+                rules[j + 1] := tmp
+            }
+        }
+    }
+}
+
+; Return rules in config order (word<tab>keys per line) so the UI shows them as entered.
+SettingsGetSendRules() {
+    global configPath
+    result := ""
+    count := 0
+    try count := Integer(IniRead(configPath, "Send", "RuleCount", "0"))
+    if count = 0 {
+        legacy := Trim(IniRead(configPath, "Send", "Word", ""))
+        if legacy != ""
+            result := legacy "`t{Enter}"
+    } else {
+        loop count {
+            word := Trim(IniRead(configPath, "Send", "Rule" A_Index "Word", ""))
+            keys := Trim(IniRead(configPath, "Send", "Rule" A_Index "Keys", ""))
+            if word != "" and keys != ""
+                result .= (result = "" ? "" : "`n") word "`t" keys
+        }
+    }
+    return result
+}
+
+SettingsSetSendRules(serialized) {
+    global configPath, SendRules
+    oldCount := 0
+    try oldCount := Integer(IniRead(configPath, "Send", "RuleCount", "0"))
+    loop oldCount {
+        IniDelete(configPath, "Send", "Rule" A_Index "Word")
+        IniDelete(configPath, "Send", "Rule" A_Index "Keys")
+    }
+    IniDelete(configPath, "Send", "Word")
+
+    rules := []
+    for line in StrSplit(String(serialized), "`n") {
+        line := Trim(line, " `t`r`n")
+        if line = ""
+            continue
+        parts := StrSplit(line, "`t")
+        word := parts.Length >= 1 ? Trim(parts[1]) : ""
+        keys := parts.Length >= 2 ? Trim(parts[2]) : ""
+        if word != "" and keys != ""
+            rules.Push({ word: word, keys: keys })
+    }
+
+    loop rules.Length {
+        IniWrite(rules[A_Index].word, configPath, "Send", "Rule" A_Index "Word")
+        IniWrite(rules[A_Index].keys, configPath, "Send", "Rule" A_Index "Keys")
+    }
+    IniWrite(rules.Length, configPath, "Send", "RuleCount")
+
+    SortSendRulesByLength(rules)
+    SendRules := rules
 }
 
 SettingsGetAudioDevices() {
@@ -1427,7 +1527,7 @@ SettingsExportLog() {
 }
 
 SettingsUpdateSetting(setting, value) {
-    global configPath, FollowWindowsDefault, MicDevice, PushToTalkKey, userHotkey, TranscriptionEngine, WhisperThreads, ModelPath, RunAsAdministrator, SendWordEnabled, SendWord, TabNavEnabled
+    global configPath, FollowWindowsDefault, MicDevice, PushToTalkKey, userHotkey, TranscriptionEngine, WhisperThreads, ModelPath, RunAsAdministrator, SendWordEnabled, SendRules, TabNavEnabled
     setting := String(setting)
     value := String(value)
 
@@ -1488,9 +1588,8 @@ SettingsUpdateSetting(setting, value) {
         case "sendWordEnabled":
             SendWordEnabled := value = "true"
             IniWrite(SendWordEnabled ? "true" : "false", configPath, "Send", "Enabled")
-        case "sendWord":
-            SendWord := Trim(value)
-            IniWrite(SendWord, configPath, "Send", "Word")
+        case "sendRules":
+            SettingsSetSendRules(value)
         case "tabNavEnabled":
             TabNavEnabled := value = "true"
             IniWrite(TabNavEnabled ? "true" : "false", configPath, "TabNavigation", "Enabled")

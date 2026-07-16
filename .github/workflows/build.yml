@@ -157,7 +157,9 @@ jobs:
 
           [Send]
           Enabled=false
-          Word=go
+          RuleCount=1
+          Rule1Word=go
+          Rule1Keys={Enter}
 
           [TabNavigation]
           Enabled=true
