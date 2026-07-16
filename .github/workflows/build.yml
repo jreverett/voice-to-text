@@ -164,6 +164,11 @@ jobs:
           [TabNavigation]
           Enabled=true
           TargetProcess=WindowsTerminal.exe
+
+          [Commands]
+          Enabled=false
+          WakeWord=computer
+          Model=llama-3.1-8b-instant
           "@ | Set-Content "build\config.ini" -NoNewline
 
       - name: Create directory structure

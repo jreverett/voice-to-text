@@ -29,6 +29,9 @@ const sendRulesList = document.querySelector("#send-rules-list");
 const addSendRule = document.querySelector("#add-send-rule");
 const sendWordRow = document.querySelector("#send-word-row");
 const tabNavEnabled = document.querySelector("#tab-nav-enabled");
+const commandsEnabled = document.querySelector("#commands-enabled");
+const commandWakeWord = document.querySelector("#command-wake-word");
+const commandWakeRow = document.querySelector("#command-wake-row");
 const status = document.querySelector("#save-status");
 const shortcutCapture = document.querySelector("#shortcut-capture");
 const shortcutPreview = document.querySelector("#shortcut-preview");
@@ -292,6 +295,9 @@ function loadSettings() {
   loadSendRules();
   updateSendWordRow();
   tabNavEnabled.checked = asBoolean(bridge.GetConfigValue("TabNavigation", "Enabled", "true"));
+  commandsEnabled.checked = asBoolean(bridge.GetConfigValue("Commands", "Enabled", "false"));
+  commandWakeWord.value = asString(bridge.GetConfigValue("Commands", "WakeWord", "computer"));
+  updateCommandRow();
 
   configuredMicrophone = asString(bridge.GetConfigValue("Audio", "MicDevice", ""));
   const devices = asString(bridge.GetAudioDevices()).split("\n").filter(Boolean);
@@ -578,6 +584,22 @@ addSendRule.addEventListener("click", () => {
 });
 tabNavEnabled.addEventListener("change", () => {
   updateSetting("tabNavEnabled", tabNavEnabled.checked ? "true" : "false");
+});
+function updateCommandRow() {
+  const on = commandsEnabled.checked;
+  commandWakeWord.disabled = !on;
+  commandWakeRow.classList.toggle("disabled", !on);
+}
+commandsEnabled.addEventListener("change", () => {
+  updateCommandRow();
+  updateSetting("commandsEnabled", commandsEnabled.checked ? "true" : "false");
+});
+commandWakeWord.addEventListener("change", () => {
+  const value = commandWakeWord.value.trim();
+  commandWakeWord.value = value;
+  if (value) {
+    updateSetting("commandWakeWord", value);
+  }
 });
 onboardingOpenConsole.addEventListener("click", () => {
   try {

@@ -65,6 +65,9 @@ SendWordEnabled := IniRead(configPath, "Send", "Enabled", "false") = "true"
 SendRules := LoadSendRules()
 TabNavEnabled := IniRead(configPath, "TabNavigation", "Enabled", "true") = "true"
 TabNavProcess := IniRead(configPath, "TabNavigation", "TargetProcess", "WindowsTerminal.exe")
+CommandsEnabled := IniRead(configPath, "Commands", "Enabled", "false") = "true"
+CommandWakeWord := Trim(IniRead(configPath, "Commands", "WakeWord", "computer"))
+CommandModel := IniRead(configPath, "Commands", "Model", "llama-3.1-8b-instant")
 lastTranscriptionError := ""
 
 ; Ensure the temp directory exists — device queries redirect mic-capture output into it,
@@ -701,7 +704,7 @@ OnKeyDown(*) {
 
 OnKeyUp(*) {
     global isRecording, isTranscribing, capturePID, lastTranscriptionError, isKeyHeld
-    global SendWordEnabled, SendRules
+    global SendWordEnabled, SendRules, CommandsEnabled, CommandWakeWord
 
     isKeyHeld := false
     if !isRecording
@@ -741,6 +744,18 @@ OnKeyUp(*) {
         isTranscribing := false
         ResetIcon()
         return
+    }
+
+    ; Voice command mode: if the transcript starts with the wake word, route it to the LLM instead of pasting.
+    if CommandsEnabled and CommandWakeWord != "" {
+        escapedWake := RegExReplace(CommandWakeWord, "([\\.\*\?\+\[\]\{\}\(\)\^\$\|\/])", "\$1")
+        wakePattern := "i)^\s*" escapedWake "\b[\s,\.:;]*"
+        if RegExMatch(output, wakePattern) {
+            RunVoiceCommand(RegExReplace(output, wakePattern, ""))
+            isTranscribing := false
+            ResetIcon()
+            return
+        }
     }
 
     ; Optional send rules: if the transcript ends with a trigger word, strip it and press its mapped keys after pasting.
@@ -933,6 +948,196 @@ JsonUnescape(value) {
     value := StrReplace(value, '\t', "`t")
     value := StrReplace(value, '\\', '\')
     return value
+}
+
+JsonEscape(value) {
+    value := StrReplace(value, '\', '\\')
+    value := StrReplace(value, '"', '\"')
+    value := StrReplace(value, "`r", '\r')
+    value := StrReplace(value, "`n", '\n')
+    value := StrReplace(value, "`t", '\t')
+    return value
+}
+
+; Visible top-level windows with a title, for the model to pick from when focusing.
+GetCommandWindows() {
+    result := []
+    for hwnd in WinGetList() {
+        title := ""
+        try title := WinGetTitle("ahk_id " hwnd)
+        if title = ""
+            continue
+        exe := ""
+        try exe := WinGetProcessName("ahk_id " hwnd)
+        if exe = ""
+            continue
+        result.Push({ hwnd: hwnd, title: title, exe: exe })
+        if result.Length >= 40
+            break
+    }
+    return result
+}
+
+; User-authored launch aliases from [CommandAliases] (e.g. email=outlook.exe). Values are trusted.
+GetCommandAliases() {
+    global configPath
+    aliases := Map()
+    raw := ""
+    try raw := IniRead(configPath, "CommandAliases")
+    for line in StrSplit(raw, "`n") {
+        pos := InStr(line, "=")
+        if pos < 2
+            continue
+        name := Trim(SubStr(line, 1, pos - 1))
+        target := Trim(SubStr(line, pos + 1))
+        if name != "" and target != ""
+            aliases[StrLower(name)] := target
+    }
+    return aliases
+}
+
+RunVoiceCommand(commandText) {
+    commandText := Trim(commandText)
+    if commandText = "" {
+        ShowTooltipTimed("No command heard", 2000)
+        return
+    }
+    if GetGroqApiKey() = "" {
+        ShowTooltipTimed("Voice commands need a Groq API key (Settings)", 3000)
+        return
+    }
+
+    windows := GetCommandWindows()
+    aliases := GetCommandAliases()
+    action := AskGroqForCommand(commandText, windows, aliases)
+    if !IsObject(action) {
+        ShowTooltipTimed("Command failed", 2500)
+        return
+    }
+    ExecuteCommandAction(action, windows, aliases)
+}
+
+AskGroqForCommand(commandText, windows, aliases) {
+    global CommandModel
+
+    windowList := ""
+    for index, win in windows
+        windowList .= index ". " win.title " [" win.exe "]`n"
+    if windowList = ""
+        windowList := "(none open)"
+
+    aliasList := ""
+    for name, target in aliases
+        aliasList .= "- " name "`n"
+    if aliasList = ""
+        aliasList := "(none configured)"
+
+    systemPrompt := "You route a spoken desktop command to ONE action. Reply with JSON only.`n"
+        . "Open windows (use the number to focus one):`n" windowList
+        . "Launch aliases (use the alias name):`n" aliasList
+        . "Schema: {""action"":""focus|launch|keys|none"",""window"":<number or null>,""app"":""<alias or executable.exe or null>"",""keys"":""<AHK send string or null>""}`n"
+        . "Rules: switch to / go back to an open window => focus with its number. "
+        . "open / launch an app => launch with a matching alias, else a bare executable like msedge.exe. "
+        . "keyboard shortcut => keys (e.g. !{F4} for Alt+F4, #{l} to lock the screen). "
+        . "If nothing fits => none."
+
+    body := '{"model":"' CommandModel '","temperature":0,"response_format":{"type":"json_object"},"messages":['
+        . '{"role":"system","content":"' JsonEscape(systemPrompt) '"},'
+        . '{"role":"user","content":"' JsonEscape(commandText) '"}]}'
+
+    bodyPath := A_ScriptDir "\temp\command_request.json"
+    outPath := A_ScriptDir "\temp\command_output.txt"
+    requestFile := FileOpen(bodyPath, "w", "UTF-8-RAW")
+    requestFile.Write(body)
+    requestFile.Close()
+    if FileExist(outPath)
+        FileDelete(outPath)
+
+    curlCmd := 'cmd /c "curl -sS -X POST https://api.groq.com/openai/v1/chat/completions'
+        . ' -H "Authorization: Bearer ' GetGroqApiKey() '"'
+        . ' -H "Content-Type: application/json"'
+        . ' --data-binary "@' bodyPath '"'
+        . ' -w "\n__HTTP__%{http_code}"'
+        . ' > "' outPath '" 2>&1"'
+    exitCode := RunWait(curlCmd, A_ScriptDir, "Hide")
+
+    raw := ""
+    if FileExist(outPath) {
+        raw := Trim(FileRead(outPath))
+        FileDelete(outPath)
+    }
+    if FileExist(bodyPath)
+        FileDelete(bodyPath)
+
+    status := 0
+    respBody := raw
+    if RegExMatch(raw, "__HTTP__(\d+)\s*$", &statusMatch) {
+        status := Integer(statusMatch[1])
+        respBody := Trim(SubStr(raw, 1, statusMatch.Pos - 1))
+    }
+    if exitCode != 0 and status = 0 {
+        LogError("Command request failed", raw)
+        return ""
+    }
+    if status != 200 {
+        LogError("Command API returned HTTP " status, respBody)
+        return ""
+    }
+
+    content := ParseJsonString(respBody, "content")
+    if content = "" {
+        LogError("Command response empty", respBody)
+        return ""
+    }
+
+    action := { action: StrLower(ParseJsonString(content, "action")), app: ParseJsonString(content, "app"), keys: ParseJsonString(content, "keys"), window: 0 }
+    if RegExMatch(content, '"window"\s*:\s*(\d+)', &windowMatch)
+        action.window := Integer(windowMatch[1])
+    return action
+}
+
+ExecuteCommandAction(action, windows, aliases) {
+    switch action.action {
+        case "focus":
+            if action.window >= 1 and action.window <= windows.Length {
+                win := windows[action.window]
+                WinActivate("ahk_id " win.hwnd)
+                ShowTooltipTimed("Focused: " win.title, 2500)
+            } else {
+                ShowTooltipTimed("No matching window", 2500)
+            }
+        case "launch":
+            target := StrLower(action.app)
+            if aliases.Has(target) {
+                try {
+                    Run(aliases[target])
+                    ShowTooltipTimed("Launched: " target, 2500)
+                } catch {
+                    ShowTooltipTimed("Couldn't launch " target, 2500)
+                }
+            } else if RegExMatch(action.app, "i)^[\w.\-]+\.exe$") {
+                try {
+                    Run(action.app)
+                    ShowTooltipTimed("Launched: " action.app, 2500)
+                } catch {
+                    ShowTooltipTimed("Couldn't launch " action.app, 2500)
+                }
+            } else {
+                ShowTooltipTimed("Nothing to launch", 2500)
+            }
+        case "keys":
+            if action.keys != "" {
+                if RegExMatch(action.keys, "i)^#\{l\}$")
+                    DllCall("user32\LockWorkStation")
+                else
+                    SendInput(action.keys)
+                ShowTooltipTimed("Sent: " FormatSendKeys(action.keys), 2500)
+            } else {
+                ShowTooltipTimed("Command not understood", 2500)
+            }
+        default:
+            ShowTooltipTimed("Command not understood", 2500)
+    }
 }
 
 ShowStartupWindow() {
@@ -1551,7 +1756,7 @@ SettingsExportLog() {
 }
 
 SettingsUpdateSetting(setting, value) {
-    global configPath, FollowWindowsDefault, MicDevice, PushToTalkKey, userHotkey, TranscriptionEngine, WhisperThreads, ModelPath, RunAsAdministrator, SendWordEnabled, SendRules, TabNavEnabled
+    global configPath, FollowWindowsDefault, MicDevice, PushToTalkKey, userHotkey, TranscriptionEngine, WhisperThreads, ModelPath, RunAsAdministrator, SendWordEnabled, SendRules, TabNavEnabled, CommandsEnabled, CommandWakeWord
     setting := String(setting)
     value := String(value)
 
@@ -1614,6 +1819,13 @@ SettingsUpdateSetting(setting, value) {
             IniWrite(SendWordEnabled ? "true" : "false", configPath, "Send", "Enabled")
         case "sendRules":
             SettingsSetSendRules(value)
+        case "commandsEnabled":
+            CommandsEnabled := value = "true"
+            IniWrite(CommandsEnabled ? "true" : "false", configPath, "Commands", "Enabled")
+        case "commandWakeWord":
+            CommandWakeWord := Trim(value)
+            if CommandWakeWord != ""
+                IniWrite(CommandWakeWord, configPath, "Commands", "WakeWord")
         case "tabNavEnabled":
             TabNavEnabled := value = "true"
             IniWrite(TabNavEnabled ? "true" : "false", configPath, "TabNavigation", "Enabled")

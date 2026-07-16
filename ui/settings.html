@@ -260,6 +260,27 @@
               </span>
             </span>
           </label>
+
+          <label class="setting-row">
+            <span>
+              <strong>Voice commands</strong>
+              <small>Start speech with the wake word to run a command (e.g. "computer, open my browser"). Uses Groq, so it needs an API key.</small>
+            </span>
+            <span class="control-cluster">
+              <span class="switch">
+                <input id="commands-enabled" type="checkbox">
+                <span class="slider"></span>
+              </span>
+            </span>
+          </label>
+
+          <label id="command-wake-row" class="setting-row" for="command-wake-word">
+            <span>
+              <strong>Wake word</strong>
+              <small>Spoken at the start to mark the rest as a command.</small>
+            </span>
+            <input id="command-wake-word" type="text" autocomplete="off" spellcheck="false" placeholder="computer">
+          </label>
         </div>
       </section>
 
