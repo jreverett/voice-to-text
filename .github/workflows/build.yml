@@ -168,7 +168,7 @@ jobs:
           [Commands]
           Enabled=false
           WakeWord=computer
-          Model=llama-3.1-8b-instant
+          Model=llama-3.3-70b-versatile
           "@ | Set-Content "build\config.ini" -NoNewline
 
       - name: Create directory structure

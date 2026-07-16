@@ -67,7 +67,7 @@ TabNavEnabled := IniRead(configPath, "TabNavigation", "Enabled", "true") = "true
 TabNavProcess := IniRead(configPath, "TabNavigation", "TargetProcess", "WindowsTerminal.exe")
 CommandsEnabled := IniRead(configPath, "Commands", "Enabled", "false") = "true"
 CommandWakeWord := Trim(IniRead(configPath, "Commands", "WakeWord", "computer"))
-CommandModel := IniRead(configPath, "Commands", "Model", "llama-3.1-8b-instant")
+CommandModel := IniRead(configPath, "Commands", "Model", "llama-3.3-70b-versatile")
 lastTranscriptionError := ""
 
 ; Ensure the temp directory exists — device queries redirect mic-capture output into it,
@@ -1032,15 +1032,21 @@ AskGroqForCommand(commandText, windows, aliases) {
     if aliasList = ""
         aliasList := "(none configured)"
 
-    schema := 'Schema: {"action":"focus|launch|keys|none","window":<number or null>,"app":"<alias or executable.exe or null>","keys":"<AHK send string or null>"}'
+    schema := 'Schema: {"action":"focus|launch|tab|keys|none","window":<number or null>,"query":"<tab name or null>","app":"<alias or executable or null>","keys":"<AHK send string or null>","then":"<AHK send string to press after focusing/launching or null>"}'
     systemPrompt := "You route a spoken desktop command to ONE action. Reply with JSON only.`n"
         . "Open windows (use the number to focus one):`n" . windowList
         . "Launch aliases (use the alias name):`n" . aliasList
         . schema . "`n"
-        . "Rules: switch to / go back to an open window => focus with its number. "
-        . "open / launch an app => launch with a matching alias, else a bare executable like msedge.exe. "
-        . "keyboard shortcut => keys (e.g. !{F4} for Alt+F4, #{l} to lock the screen). "
-        . "If nothing fits => none."
+        . "Rules:`n"
+        . "- switch to / go to / go back to an open window => focus, with its number.`n"
+        . "- go to / open the <name> tab (in a browser window) => tab, with the browser window number and query set to <name>.`n"
+        . "- open / launch / start an app => launch. Use a listed alias name if one fits, otherwise a runnable executable. "
+        . "Common apps: notepad=notepad.exe, calculator=calc.exe, edge or browser=msedge.exe, chrome=chrome.exe, files or explorer=explorer.exe, word=winword.exe, excel=excel.exe, email or outlook=outlook.exe, terminal=wt.exe, task manager=taskmgr.exe.`n"
+        . "- a keyboard shortcut => keys (e.g. !{F4} for Alt+F4, #{l} to lock the screen).`n"
+        . "- if the request also asks to do something in the app after opening it, set then to the shortcut. To start a new email in Outlook use then ^+m. New document/item is usually ^n.`n"
+        . "- prefer focus over launch when the app is already in the open windows list.`n"
+        . "- use none only if nothing matches.`n"
+        . 'Examples: {"action":"launch","app":"notepad.exe"} | {"action":"launch","app":"outlook.exe","then":"^+m"} | {"action":"focus","window":2,"then":"^+m"} | {"action":"tab","window":3,"query":"GitHub"} | {"action":"keys","keys":"!{F4}"}'
 
     body := '{"model":"' . CommandModel . '","temperature":0,"response_format":{"type":"json_object"},"messages":['
         . '{"role":"system","content":"' . JsonEscape(systemPrompt) . '"},'
@@ -1091,7 +1097,7 @@ AskGroqForCommand(commandText, windows, aliases) {
         return ""
     }
 
-    action := { action: StrLower(ParseJsonString(content, "action")), app: ParseJsonString(content, "app"), keys: ParseJsonString(content, "keys"), window: 0 }
+    action := { action: StrLower(ParseJsonString(content, "action")), app: ParseJsonString(content, "app"), keys: ParseJsonString(content, "keys"), query: ParseJsonString(content, "query"), then: ParseJsonString(content, "then"), window: 0 }
     if RegExMatch(content, '"window"\s*:\s*(\d+)', &windowMatch)
         action.window := Integer(windowMatch[1])
     return action
@@ -1103,28 +1109,36 @@ ExecuteCommandAction(action, windows, aliases) {
             if action.window >= 1 and action.window <= windows.Length {
                 win := windows[action.window]
                 WinActivate("ahk_id " win.hwnd)
+                SendThenKeys(action.then, "ahk_id " win.hwnd, 4)
                 ShowTooltipTimed("Focused: " win.title, 2500)
             } else {
                 ShowTooltipTimed("No matching window", 2500)
             }
         case "launch":
-            target := StrLower(action.app)
-            if aliases.Has(target) {
+            aliasKey := StrLower(action.app)
+            target := aliases.Has(aliasKey) ? aliases[aliasKey] : action.app
+            if target != "" and (aliases.Has(aliasKey) or RegExMatch(target, "i)^[\w.\-]+$")) {
                 try {
-                    Run(aliases[target])
+                    Run(target)
+                    SendThenKeys(action.then, "ahk_exe " LaunchExeName(target), 20)
                     ShowTooltipTimed("Launched: " target, 2500)
                 } catch {
                     ShowTooltipTimed("Couldn't launch " target, 2500)
                 }
-            } else if RegExMatch(action.app, "i)^[\w.\-]+\.exe$") {
-                try {
-                    Run(action.app)
-                    ShowTooltipTimed("Launched: " action.app, 2500)
-                } catch {
-                    ShowTooltipTimed("Couldn't launch " action.app, 2500)
-                }
             } else {
                 ShowTooltipTimed("Nothing to launch", 2500)
+            }
+        case "tab":
+            if action.window >= 1 and action.window <= windows.Length {
+                win := windows[action.window]
+                if FocusTab(win.hwnd, action.query) {
+                    SendThenKeys(action.then, "ahk_id " win.hwnd, 4)
+                    ShowTooltipTimed("Tab: " action.query, 2500)
+                } else {
+                    ShowTooltipTimed("Tab not found: " action.query, 2500)
+                }
+            } else {
+                ShowTooltipTimed("No matching window", 2500)
             }
         case "keys":
             if action.keys != "" {
@@ -1139,6 +1153,49 @@ ExecuteCommandAction(action, windows, aliases) {
         default:
             ShowTooltipTimed("Command not understood", 2500)
     }
+}
+
+; Cycle a browser window's tabs (Ctrl+Tab) until the active tab's title contains the query.
+FocusTab(hwnd, query) {
+    query := Trim(query)
+    WinActivate("ahk_id " hwnd)
+    WinWaitActive("ahk_id " hwnd, , 2)
+    if query = ""
+        return false
+    firstTitle := ""
+    try firstTitle := WinGetTitle("ahk_id " hwnd)
+    if InStr(firstTitle, query)
+        return true
+    loop 40 {
+        SendInput("^{Tab}")
+        Sleep(130)
+        current := ""
+        try current := WinGetTitle("ahk_id " hwnd)
+        if InStr(current, query)
+            return true
+        if current = firstTitle
+            return false
+    }
+    return false
+}
+
+; Press a follow-up shortcut once the target window is present and active (for launch: waits for it to load).
+SendThenKeys(keys, winSpec, waitSeconds) {
+    if Trim(keys) = ""
+        return
+    if !WinWait(winSpec, , waitSeconds)
+        return
+    WinActivate(winSpec)
+    WinWaitActive(winSpec, , 3)
+    Sleep(700)
+    SendInput(keys)
+}
+
+LaunchExeName(target) {
+    SplitPath(target, &name)
+    if !InStr(name, ".")
+        name .= ".exe"
+    return name
 }
 
 ShowStartupWindow() {
