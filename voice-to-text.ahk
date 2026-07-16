@@ -770,10 +770,15 @@ OnKeyUp(*) {
         ClipWait(1)
         SendInput("^v")
     }
-    if sendNow
-        SendInput(sendKeys)
+    if sendNow {
+        ; Windows ignores synthetic Win+L, so trigger the lock through the API instead.
+        if RegExMatch(sendKeys, "i)^#\{l\}$")
+            DllCall("user32\LockWorkStation")
+        else
+            SendInput(sendKeys)
+    }
 
-    preview := StrLen(output) > 50 ? SubStr(output, 1, 50) "..." : (output = "" ? "(enter)" : output)
+    preview := StrLen(output) > 50 ? SubStr(output, 1, 50) "..." : (output != "" ? output : (sendNow ? FormatSendKeys(sendKeys) : "(empty)"))
     ShowTooltipTimed((sendNow ? "Sent: " : "Pasted: ") preview, 3000)
 
     isTranscribing := false
@@ -1339,6 +1344,25 @@ LoadSendRules() {
     }
     SortSendRulesByLength(rules)
     return rules
+}
+
+; Turn an AHK send string ("#{l}", "!{F4}") into a friendly label ("Win+L", "Alt+F4") for the tooltip.
+FormatSendKeys(keys) {
+    labels := Map("^", "Ctrl", "!", "Alt", "+", "Shift", "#", "Win")
+    parts := []
+    rest := keys
+    while rest != "" and InStr("^!+#", SubStr(rest, 1, 1)) {
+        parts.Push(labels[SubStr(rest, 1, 1)])
+        rest := SubStr(rest, 2)
+    }
+    key := RegExMatch(rest, "^\{(.+)\}$", &m) ? m[1] : rest
+    if StrLen(key) = 1
+        key := StrUpper(key)
+    parts.Push(key)
+    result := ""
+    for part in parts
+        result .= (result = "" ? "" : "+") part
+    return result
 }
 
 ; Longest trigger first so a longer phrase wins over a shorter one it contains.
