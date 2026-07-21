@@ -48,6 +48,7 @@ MicCapturePath := A_ScriptDir "\" IniRead(configPath, "Paths", "MicCapturePath",
 WhisperServerPath := A_ScriptDir "\" IniRead(configPath, "Paths", "WhisperServerPath", "bin\whisper-server.exe")
 ModelPath := A_ScriptDir "\" IniRead(configPath, "Paths", "ModelPath", "models\ggml-small.en.bin")
 TempWav := A_ScriptDir "\" IniRead(configPath, "Paths", "TempWav", "temp\recording.wav")
+FfmpegPath := A_ScriptDir "\" IniRead(configPath, "Paths", "FfmpegPath", "bin\ffmpeg.exe")
 PushToTalkKey := IniRead(configPath, "Hotkey", "PushToTalk", "CapsLock")
 userHotkey := PushToTalkKey
 AutoHeadsetToggle := IniRead(configPath, "Hotkey", "AutoHeadsetToggle", "true") = "true"
@@ -880,16 +881,22 @@ TranscribeWithGroq(audioPath) {
     if FileExist(tempOutput)
         FileDelete(tempOutput)
 
+    ; Groq caps uploads at 25MB; the raw WAV is the device's native format (often
+    ; 48kHz stereo float), so downsample to 16kHz mono FLAC before sending.
+    uploadPath := CompressForGroq(audioPath)
+
     curlCmd := 'cmd /c "curl -sS -X POST https://api.groq.com/openai/v1/audio/transcriptions'
         . ' -H "Authorization: Bearer ' . apiKey . '"'
         . ' -F "model=' . GroqModel . '"'
         . ' -F "language=' . GroqLanguage . '"'
         . ' -F "temperature=0"'
         . ' -F "response_format=text"'
-        . ' -F "file=@' . audioPath . '"'
+        . ' -F "file=@' . uploadPath . '"'
         . ' -w "\n__HTTP__%{http_code}"'
         . ' > "' tempOutput '" 2>&1"'
     exitCode := RunWait(curlCmd, A_ScriptDir, "Hide")
+    if uploadPath != audioPath
+        try FileDelete(uploadPath)
 
     raw := ""
     if FileExist(tempOutput) {
@@ -910,6 +917,12 @@ TranscribeWithGroq(audioPath) {
         return ""
     }
 
+    if status = 413 {
+        lastTranscriptionError := "Recording too long for Groq - try a shorter clip"
+        LogError("Groq API returned HTTP 413 (payload too large)", body)
+        return ""
+    }
+
     if status != 200 {
         detail := ParseJsonString(body, "message")
         lastTranscriptionError := detail != "" ? detail : "Groq API returned HTTP " status
@@ -925,6 +938,25 @@ TranscribeWithGroq(audioPath) {
     }
 
     return output
+}
+
+CompressForGroq(audioPath) {
+    global FfmpegPath
+    if !FileExist(FfmpegPath)
+        return audioPath
+
+    flacPath := RegExReplace(audioPath, "\.wav$", "") . ".flac"
+    if FileExist(flacPath)
+        try FileDelete(flacPath)
+
+    ffmpegCmd := 'cmd /c ""' FfmpegPath '" -y -i "' audioPath '" -ac 1 -ar 16000 "' flacPath '""'
+    RunWait(ffmpegCmd, A_ScriptDir, "Hide")
+
+    if FileExist(flacPath)
+        return flacPath
+
+    LogError("ffmpeg compression failed, sending raw WAV", audioPath)
+    return audioPath
 }
 
 NormalizeTranscriptText(text) {

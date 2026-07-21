@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.1 (2026-07-21)
+
+### Bug Fixes
+
+* Fixed long dictations failing with an "entity too large" error and nothing reaching the clipboard. Recordings are now compressed before being sent to Groq, so even multi-minute dictations transcribe fine. If a recording is still somehow too large, the tooltip now says so clearly.
+
 ## 1.3.0 (2026-07-16)
 
 ### Features
